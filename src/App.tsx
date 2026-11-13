@@ -16,6 +16,7 @@ import { DownloadsView } from './components/DownloadsView';
 import { ProfileView } from './components/ProfileView';
 import { AdminDashboard } from './components/AdminDashboard';
 import { BottomNavBar } from './components/BottomNavBar';
+import { OfflineIndicator } from './components/PWAInstallButton';
 import { WifiOff, Film, Tv, Sparkles, Heart, ChevronRight, CheckCircle2 } from 'lucide-react';
 
 const MainContent: React.FC = () => {
@@ -208,6 +209,9 @@ const MainContent: React.FC = () => {
       <MovieDetailsModal />
       <TVShowDetailsModal />
       <VideoPlayerModal />
+
+      {/* Offline Connectivity Indicator */}
+      <OfflineIndicator />
 
       {/* Bottom Navigation Bar */}
       <BottomNavBar />

@@ -9,6 +9,7 @@ import {
   SlidersHorizontal,
   LogOut
 } from 'lucide-react';
+import { PWAInstallButton } from './PWAInstallButton';
 
 export const ProfileView: React.FC = () => {
   const {
@@ -181,6 +182,9 @@ export const ProfileView: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* In-App PWA Install Card */}
+      <PWAInstallButton variant="card" />
 
       {/* Prominent Account Sign Out / Logout Card */}
       <div className="p-5 sm:p-6 rounded-3xl bg-[#121217] border border-white/5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">

@@ -1,6 +1,7 @@
 import React from 'react';
 import { useMovieContext } from '../context/MovieContext';
 import { Search, Wifi, WifiOff, Film, Tv, Heart, DownloadCloud, Sparkles } from 'lucide-react';
+import { PWAInstallButton } from './PWAInstallButton';
 
 export const Header: React.FC = () => {
   const {
@@ -154,6 +155,9 @@ export const Header: React.FC = () => {
               </span>
             )}
           </button>
+
+          {/* In-App PWA Install Button */}
+          <PWAInstallButton variant="header" />
 
           {/* Current User Avatar */}
           {currentUser ? (
