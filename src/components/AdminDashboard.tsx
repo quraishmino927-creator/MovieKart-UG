@@ -20,7 +20,8 @@ import {
   Eye,
   Sparkles,
   Smartphone,
-  Layers
+  Layers,
+  ArrowLeft
 } from 'lucide-react';
 import { Movie, TVShow, Genre, UserAccount } from '../types';
 
@@ -42,6 +43,7 @@ export const AdminDashboard: React.FC = () => {
     isAdminAuthenticated,
     authenticateAdmin,
     logoutAdmin,
+    setActiveTab,
     showToast
   } = useMovieContext();
 
@@ -151,10 +153,11 @@ export const AdminDashboard: React.FC = () => {
 
             <button
               type="button"
-              onClick={() => authenticateAdmin('1234')}
-              className="text-xs text-gray-400 hover:text-red-400 underline transition-colors cursor-pointer"
+              onClick={() => setActiveTab('home')}
+              className="inline-flex items-center justify-center gap-1.5 text-xs text-gray-400 hover:text-white transition-colors cursor-pointer pt-1"
             >
-              Use demo access PIN (1234)
+              <ArrowLeft className="w-3.5 h-3.5" />
+              <span>Return to Home</span>
             </button>
           </form>
         </div>
@@ -350,6 +353,14 @@ export const AdminDashboard: React.FC = () => {
             className="px-3.5 py-2 bg-white/5 hover:bg-white/10 text-gray-300 border border-white/10 text-xs font-semibold rounded-xl transition-colors cursor-pointer"
           >
             Lock Dashboard
+          </button>
+
+          <button
+            onClick={() => setActiveTab('home')}
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-white/5 hover:bg-white/10 text-gray-300 border border-white/10 text-xs font-semibold rounded-xl transition-colors cursor-pointer"
+          >
+            <ArrowLeft className="w-3.5 h-3.5" />
+            <span>Back to Home</span>
           </button>
         </div>
       </div>

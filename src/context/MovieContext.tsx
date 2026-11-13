@@ -332,7 +332,40 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }
   });
 
-  const [activeTab, setActiveTab] = useState<ActiveTab>('home');
+  const isAdminPath = () => {
+    if (typeof window === 'undefined') return false;
+    const path = window.location.pathname.replace(/\/+$/, '').toLowerCase();
+    const hash = window.location.hash.replace(/\/+$/, '').toLowerCase();
+    return path.endsWith('/admin') || hash === '#/admin';
+  };
+
+  const [activeTab, setActiveTabState] = useState<ActiveTab>(() =>
+    isAdminPath() ? 'admin' : 'home'
+  );
+
+  const setActiveTab = (tab: ActiveTab) => {
+    setActiveTabState(tab);
+    if (typeof window !== 'undefined') {
+      if (tab === 'admin' && !isAdminPath()) {
+        window.history.pushState({}, '', '/admin');
+      } else if (tab !== 'admin' && isAdminPath()) {
+        window.history.pushState({}, '', '/');
+      }
+    }
+  };
+
+  useEffect(() => {
+    const syncRoute = () => {
+      setActiveTabState(isAdminPath() ? 'admin' : 'home');
+    };
+    window.addEventListener('popstate', syncRoute);
+    window.addEventListener('hashchange', syncRoute);
+    return () => {
+      window.removeEventListener('popstate', syncRoute);
+      window.removeEventListener('hashchange', syncRoute);
+    };
+  }, []);
+
   const [selectedGenre, setSelectedGenre] = useState<Genre>('All');
   const [searchQuery, setSearchQuery] = useState<string>('');
   
@@ -912,7 +945,7 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       showToast('Admin Access Granted');
       return true;
     }
-    showToast('Incorrect Admin PIN! (Default: 1234)');
+    showToast('Incorrect Admin PIN. Access denied.');
     return false;
   };
 

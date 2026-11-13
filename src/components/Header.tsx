@@ -1,6 +1,6 @@
 import React from 'react';
 import { useMovieContext } from '../context/MovieContext';
-import { Search, Wifi, WifiOff, Film, Tv, ShieldCheck, Heart, DownloadCloud, Sparkles } from 'lucide-react';
+import { Search, Wifi, WifiOff, Film, Tv, Heart, DownloadCloud, Sparkles } from 'lucide-react';
 
 export const Header: React.FC = () => {
   const {
@@ -15,7 +15,6 @@ export const Header: React.FC = () => {
     watchlist,
     downloads,
     currentUser,
-    isAdminAuthenticated,
     showToast
   } = useMovieContext();
 
@@ -153,23 +152,6 @@ export const Header: React.FC = () => {
               <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-600 text-[10px] font-bold text-white rounded-full flex items-center justify-center">
                 {completedDownloadsCount}
               </span>
-            )}
-          </button>
-
-          {/* Admin Dashboard shortcut button */}
-          <button
-            onClick={() => setActiveTab('admin')}
-            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold border transition-all ${
-              activeTab === 'admin'
-                ? 'bg-red-600 text-white border-red-500 shadow-md shadow-red-600/30'
-                : 'bg-white/5 text-gray-300 border-white/10 hover:text-white hover:bg-white/10'
-            }`}
-            title="Admin Management Dashboard"
-          >
-            <ShieldCheck className="w-4 h-4 text-red-500" />
-            <span className="hidden md:inline">Admin</span>
-            {isAdminAuthenticated && (
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
             )}
           </button>
 

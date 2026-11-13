@@ -34,6 +34,27 @@ const MainContent: React.FC = () => {
 
   const [filterVJOnly, setFilterVJOnly] = useState(false);
 
+  // Admin route (/admin): only accessible by typing /admin at the end of the URL
+  if (activeTab === 'admin') {
+    return (
+      <div className="min-h-screen bg-[#070709] text-gray-100 flex flex-col font-['Plus_Jakarta_Sans']">
+        {currentUser && <Header />}
+        <main className="flex-1">
+          <AdminDashboard />
+        </main>
+        {toastMessage && (
+          <div className="fixed top-20 right-4 sm:right-8 z-50 animate-bounce duration-200">
+            <div className="bg-[#181824] border border-red-500/50 text-white px-4 py-2.5 rounded-2xl shadow-2xl flex items-center gap-2.5 text-xs sm:text-sm font-semibold backdrop-blur-md">
+              <span className="w-2 h-2 rounded-full bg-red-500 animate-ping" />
+              <span>{toastMessage}</span>
+            </div>
+          </div>
+        )}
+        <VideoPlayerModal />
+      </div>
+    );
+  }
+
   // If no user is authenticated, render the Sign Up / Login screen as the first screen before Home
   if (!currentUser) {
     return (
@@ -171,7 +192,6 @@ const MainContent: React.FC = () => {
         {activeTab === 'watchlist' && <WatchlistView />}
         {activeTab === 'downloads' && <DownloadsView />}
         {activeTab === 'profile' && <ProfileView />}
-        {activeTab === 'admin' && <AdminDashboard />}
       </main>
 
       {/* Floating Toast Notification */}

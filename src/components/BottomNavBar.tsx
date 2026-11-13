@@ -1,10 +1,10 @@
 import React from 'react';
 import { useMovieContext } from '../context/MovieContext';
-import { Home, Search, Heart, DownloadCloud, User, ShieldCheck } from 'lucide-react';
+import { Home, Search, Heart, DownloadCloud, User } from 'lucide-react';
 import { ActiveTab } from '../types';
 
 export const BottomNavBar: React.FC = () => {
-  const { activeTab, setActiveTab, watchlist, downloads, isAdminAuthenticated } = useMovieContext();
+  const { activeTab, setActiveTab, watchlist, downloads } = useMovieContext();
 
   const completedDownloadsCount = downloads.filter((d) => d.status === 'completed').length;
   const activeDownloadsCount = downloads.filter((d) => d.status === 'downloading').length;
