@@ -1,0 +1,6 @@
+{
+  "name": "MovieKart UG - Ugandan & Global Streaming",
+  "description": "Stream trending blockbusters, African cinema, and VJ translated movies with offline downloads, dark cinema player, and admin dashboard.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
