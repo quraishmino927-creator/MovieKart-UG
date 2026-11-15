@@ -1,8 +1,30 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import {
+  collection,
+  onSnapshot,
+  addDoc,
+  updateDoc,
+  deleteDoc,
+  doc,
+  serverTimestamp,
+  Timestamp
+} from 'firebase/firestore';
+import {
+  User,
+  signInWithEmailAndPassword,
+  signOut,
+  onAuthStateChanged
+} from 'firebase/auth';
+import {
+  db,
+  auth,
+  OperationType,
+  buildFirestoreErrorInfo,
+  testFirestoreConnection
+} from '../lib/firebase';
+import {
   Movie,
   TVShow,
-  Season,
   Episode,
   Genre,
   DownloadItem,
@@ -13,14 +35,15 @@ import {
   PlayableItem,
   ContinueWatchingItem
 } from '../types';
-import { INITIAL_MOVIES, INITIAL_USERS } from '../data/movies';
-import { INITIAL_TV_SHOWS } from '../data/tvshows';
 
 interface MovieContextType {
   contentMode: ContentMode;
   setContentMode: (mode: ContentMode) => void;
   movies: Movie[];
+  moviesLoading: boolean;
+  firestoreError: string | null;
   tvShows: TVShow[];
+  tvShowsLoading: boolean;
   users: UserAccount[];
   currentUser: UserAccount | null;
   isAuthenticated: boolean;
@@ -35,6 +58,8 @@ interface MovieContextType {
   selectedShowForDetails: TVShow | null;
   currentlyPlayingItem: PlayableItem | null;
   selectedVJTrack: VJTrack | null;
+  adminUser: User | null;
+  adminAuthLoading: boolean;
   isAdminAuthenticated: boolean;
   toastMessage: string | null;
 
@@ -44,13 +69,27 @@ interface MovieContextType {
   setSearchQuery: (query: string) => void;
   toggleWatchlist: (id: string) => void;
   isInWatchlist: (id: string) => boolean;
-  startDownload: (item: Movie | { id: string; title: string; genre: string; posterUrl: string; videoUrl: string; fileSizeMb?: number; isEpisode?: boolean; episodeTitle?: string }, quality?: string) => void;
+  startDownload: (
+    item:
+      | Movie
+      | {
+          id: string;
+          title: string;
+          genre: string;
+          posterUrl: string;
+          videoUrl: string;
+          fileSizeMb?: number;
+          isEpisode?: boolean;
+          episodeTitle?: string;
+        },
+    quality?: string
+  ) => void;
   pauseDownload: (id: string) => void;
   resumeDownload: (id: string) => void;
   deleteDownload: (id: string) => void;
   clearAllDownloads: () => void;
   getDownloadStatus: (id: string) => DownloadItem | undefined;
-  
+
   // Continue Watching Actions
   updateWatchProgress: (params: {
     id: string;
@@ -87,13 +126,18 @@ interface MovieContextType {
   closeShowDetails: () => void;
 
   // Rating system
-  rateMovie: (movieId: string, rating: number) => void;
+  rateMovie: (movieId: string, rating: number) => Promise<void>;
   getUserRating: (movieId: string) => number | undefined;
 
-  // Auth & User Session Actions (1: Google 1-click, 2: Phone Number, 3: Email & Password, Logout)
+  // Viewer Session Actions
   signUpWithGoogle: (customData?: { name?: string; email?: string; avatar?: string }) => void;
   signUpWithPhone: (phoneNumber: string, name: string, momoProvider?: 'MTN Mobile Money' | 'Airtel Money') => void;
-  signUpWithEmail: (email: string, password: string, name: string, momoProvider?: 'MTN Mobile Money' | 'Airtel Money') => { success: boolean; error?: string };
+  signUpWithEmail: (
+    email: string,
+    password: string,
+    name: string,
+    momoProvider?: 'MTN Mobile Money' | 'Airtel Money'
+  ) => { success: boolean; error?: string };
   signInWithEmail: (email: string, password: string) => { success: boolean; error?: string };
   continueAsGuest: () => void;
   logoutUser: () => void;
@@ -102,14 +146,13 @@ interface MovieContextType {
   // Preferences
   setOfflineMode: (offline: boolean) => void;
   setCurrentUser: (user: UserAccount | null) => void;
-  
-  // Admin actions
-  authenticateAdmin: (pin: string) => boolean;
-  logoutAdmin: () => void;
-  addMovie: (movie: Omit<Movie, 'id'>) => void;
-  updateMovie: (movie: Movie) => void;
-  deleteMovie: (movieId: string) => void;
-  addTVShow: (show: Omit<TVShow, 'id'>) => void;
+
+  // Firebase Admin Auth & Firestore CRUD Actions
+  loginAdminWithEmail: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  logoutAdmin: () => Promise<void>;
+  addMovie: (movie: Omit<Movie, 'id'>) => Promise<void>;
+  updateMovie: (movie: Movie) => Promise<void>;
+  deleteMovie: (movieId: string) => Promise<void>;
   addEpisodeToShow: (params: {
     showTitle: string;
     posterUrl?: string;
@@ -119,9 +162,8 @@ interface MovieContextType {
     videoUrl: string;
     duration?: string;
     synopsis?: string;
-  }) => void;
-  updateTVShow: (show: TVShow) => void;
-  deleteTVShow: (showId: string) => void;
+  }) => Promise<void>;
+  deleteTVShow: (showId: string) => Promise<void>;
   addUser: (user: Omit<UserAccount, 'id'>) => void;
   updateUser: (user: UserAccount) => void;
   deleteUser: (userId: string) => void;
@@ -132,75 +174,29 @@ const MovieContext = createContext<MovieContextType | undefined>(undefined);
 
 const STORAGE_KEYS = {
   CONTENT_MODE: 'moviekart_ug_content_mode',
-  MOVIES: 'moviekart_ug_movies',
-  TV_SHOWS: 'moviekart_ug_tv_shows',
   USERS: 'moviekart_ug_users',
   WATCHLIST: 'moviekart_ug_watchlist',
   DOWNLOADS: 'moviekart_ug_downloads',
   OFFLINE: 'moviekart_ug_offline_mode',
-  ADMIN_AUTH: 'moviekart_ug_admin_auth',
   USER_RATINGS: 'moviekart_ug_user_ratings',
   CONTINUE_WATCHING: 'moviekart_ug_continue_watching',
   CURRENT_USER_ID: 'moviekart_ug_current_user_id',
   USER_PASSWORDS: 'moviekart_ug_user_passwords',
 };
 
-const DEFAULT_CONTINUE_WATCHING: ContinueWatchingItem[] = [
-  {
-    id: 'm3',
-    itemId: 'm3',
-    type: 'movie',
-    title: 'Kampala Speed: Bodaboda Chase',
-    thumbnailUrl: 'https://images.unsplash.com/photo-1544620347-c4fd4a3d5957?auto=format&fit=crop&w=800&q=80',
-    backdropUrl: 'https://images.unsplash.com/photo-1544620347-c4fd4a3d5957?auto=format&fit=crop&w=1600&q=80',
-    videoUrl: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
-    genre: 'Action',
-    durationString: '1h 38m',
-    currentTime: 3740,
-    duration: 5880,
-    progressPercentage: 64,
-    lastWatchedAt: Date.now() - 1000 * 60 * 35,
-    vjTrackName: 'VJ Junior',
-    vjTrackId: 'vj-jun'
-  },
-  {
-    id: 'tv1_s1_e2',
-    itemId: 'tv1_s1_e2',
-    type: 'episode',
-    title: 'Episode 2: Old Taxi Park Trap',
-    showTitle: 'Kampala Hustle: The Series',
-    seasonNumber: 1,
-    episodeNumber: 2,
-    thumbnailUrl: 'https://images.unsplash.com/photo-1543610892-0b1f7e6d8ac1?auto=format&fit=crop&w=800&q=80',
-    backdropUrl: 'https://images.unsplash.com/photo-1544620347-c4fd4a3d5957?auto=format&fit=crop&w=1600&q=80',
-    videoUrl: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
-    genre: 'Ugandan Hits',
-    durationString: '42m',
-    currentTime: 1080,
-    duration: 2520,
-    progressPercentage: 43,
-    lastWatchedAt: Date.now() - 1000 * 60 * 120,
-    vjTrackName: 'VJ Junior',
-    vjTrackId: 'vj1'
-  },
-  {
-    id: 'm1',
-    itemId: 'm1',
-    type: 'movie',
-    title: 'Who Killed Captain Alex?',
-    thumbnailUrl: 'https://images.unsplash.com/photo-1517604931442-7e0c8ed2963c?auto=format&fit=crop&w=800&q=80',
-    backdropUrl: 'https://images.unsplash.com/photo-1517604931442-7e0c8ed2963c?auto=format&fit=crop&w=1600&q=80',
-    videoUrl: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4',
-    genre: 'Ugandan Hits',
-    durationString: '1h 24m',
-    currentTime: 1420,
-    duration: 5040,
-    progressPercentage: 28,
-    lastWatchedAt: Date.now() - 1000 * 60 * 360,
-    vjTrackName: 'VJ Emmie',
-    vjTrackId: 'vj1'
+function parseTimestampMs(val: unknown): number {
+  if (!val) return 0;
+  if (typeof val === 'number') return val;
+  if (val instanceof Timestamp) return val.toMillis();
+  if (typeof val === 'object' && val !== null && 'seconds' in val) {
+    return Number((val as { seconds: number }).seconds) * 1000;
   }
-];
+  if (typeof val === 'string') {
+    const parsed = Date.parse(val);
+    return Number.isNaN(parsed) ? 0 : parsed;
+  }
+  return 0;
+}
 
 export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [contentMode, setContentMode] = useState<ContentMode>(() => {
@@ -215,53 +211,26 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const [userRatings, setUserRatings] = useState<Record<string, number>>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.USER_RATINGS);
-      return saved ? JSON.parse(saved) : { m1: 5, m3: 4 };
+      return saved ? JSON.parse(saved) : {};
     } catch {
-      return { m1: 5, m3: 4 };
+      return {};
     }
   });
 
-  const [movies, setMovies] = useState<Movie[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.MOVIES);
-      const list: Movie[] = saved ? JSON.parse(saved) : INITIAL_MOVIES;
-      const ratingsSaved = localStorage.getItem(STORAGE_KEYS.USER_RATINGS);
-      const ratingsObj: Record<string, number> = ratingsSaved ? JSON.parse(ratingsSaved) : { m1: 5, m3: 4 };
-      return list.map((m) => {
-        const rating5 = m.rating5 ?? +(m.rating / 2).toFixed(1);
-        const ratingsCount = m.ratingsCount ?? (Math.floor(m.rating * 35) + 60);
-        return {
-          ...m,
-          rating5,
-          ratingsCount,
-          userRating: ratingsObj[m.id]
-        };
-      });
-    } catch {
-      return INITIAL_MOVIES.map((m) => ({
-        ...m,
-        rating5: +(m.rating / 2).toFixed(1),
-        ratingsCount: Math.floor(m.rating * 35) + 60,
-        userRating: m.id === 'm1' ? 5 : undefined
-      }));
-    }
-  });
+  // Live Firestore State (NO fake/demo initial data)
+  const [movies, setMovies] = useState<Movie[]>([]);
+  const [moviesLoading, setMoviesLoading] = useState<boolean>(true);
+  const [firestoreError, setFirestoreError] = useState<string | null>(null);
 
-  const [tvShows, setTvShows] = useState<TVShow[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.TV_SHOWS);
-      return saved ? JSON.parse(saved) : INITIAL_TV_SHOWS;
-    } catch {
-      return INITIAL_TV_SHOWS;
-    }
-  });
+  const [tvShows, setTvShows] = useState<TVShow[]>([]);
+  const [tvShowsLoading, setTvShowsLoading] = useState<boolean>(true);
 
   const [users, setUsers] = useState<UserAccount[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.USERS);
-      return saved ? JSON.parse(saved) : INITIAL_USERS;
+      return saved ? JSON.parse(saved) : [];
     } catch {
-      return INITIAL_USERS;
+      return [];
     }
   });
 
@@ -272,7 +241,7 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       const savedProfile = localStorage.getItem(`moviekart_ug_user_${savedUserId}_profile`);
       if (savedProfile) return JSON.parse(savedProfile);
       const savedUsers = localStorage.getItem(STORAGE_KEYS.USERS);
-      const userList: UserAccount[] = savedUsers ? JSON.parse(savedUsers) : INITIAL_USERS;
+      const userList: UserAccount[] = savedUsers ? JSON.parse(savedUsers) : [];
       return userList.find((u) => u.id === savedUserId) || null;
     } catch {
       return null;
@@ -289,9 +258,9 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         if (userSaved) return JSON.parse(userSaved);
       }
       const saved = localStorage.getItem(STORAGE_KEYS.WATCHLIST);
-      return saved ? JSON.parse(saved) : ['m1', 'tv1', 'm3'];
+      return saved ? JSON.parse(saved) : [];
     } catch {
-      return ['m1', 'tv1', 'm3'];
+      return [];
     }
   });
 
@@ -303,8 +272,7 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         if (userSaved) return JSON.parse(userSaved);
       }
       const saved = localStorage.getItem(STORAGE_KEYS.DOWNLOADS);
-      if (saved) return JSON.parse(saved);
-      return [];
+      return saved ? JSON.parse(saved) : [];
     } catch {
       return [];
     }
@@ -318,9 +286,9 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         if (userSaved) return JSON.parse(userSaved);
       }
       const saved = localStorage.getItem(STORAGE_KEYS.CONTINUE_WATCHING);
-      return saved ? JSON.parse(saved) : DEFAULT_CONTINUE_WATCHING;
+      return saved ? JSON.parse(saved) : [];
     } catch {
-      return DEFAULT_CONTINUE_WATCHING;
+      return [];
     }
   });
 
@@ -368,19 +336,16 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
   const [selectedGenre, setSelectedGenre] = useState<Genre>('All');
   const [searchQuery, setSearchQuery] = useState<string>('');
-  
+
   const [selectedMovieForDetails, setSelectedMovieForDetails] = useState<Movie | null>(null);
   const [selectedShowForDetails, setSelectedShowForDetails] = useState<TVShow | null>(null);
   const [currentlyPlayingItem, setCurrentlyPlayingItem] = useState<PlayableItem | null>(null);
   const [selectedVJTrack, setSelectedVJTrack] = useState<VJTrack | null>(null);
 
-  const [isAdminAuthenticated, setIsAdminAuthenticated] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem(STORAGE_KEYS.ADMIN_AUTH) === 'true';
-    } catch {
-      return false;
-    }
-  });
+  // Firebase Admin Auth state
+  const [adminUser, setAdminUser] = useState<User | null>(null);
+  const [adminAuthLoading, setAdminAuthLoading] = useState<boolean>(true);
+  const isAdminAuthenticated = !!adminUser;
 
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
@@ -391,87 +356,187 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }, 3200);
   };
 
-  // Sync state to local storage
+  // 1. Validate Firestore connection & listen to Firebase Admin Auth state
+  useEffect(() => {
+    testFirestoreConnection();
+
+    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+      setAdminUser(user);
+      setAdminAuthLoading(false);
+    });
+
+    return () => unsubscribeAuth();
+  }, []);
+
+  // 2. Real-time Firestore listener for "movies" collection
+  useEffect(() => {
+    const moviesRef = collection(db, 'movies');
+    const unsubscribe = onSnapshot(
+      moviesRef,
+      (snapshot) => {
+        const loadedMovies: Movie[] = snapshot.docs.map((docSnap) => {
+          const data = docSnap.data() as Record<string, unknown>;
+          const rawRating = Number(data.rating) || 8.0;
+          const rating5 =
+            typeof data.rating5 === 'number'
+              ? data.rating5
+              : +Math.min(5, Math.max(1, rawRating / 2)).toFixed(1);
+          const descriptionText =
+            (typeof data.description === 'string' && data.description) ||
+            (typeof data.synopsis === 'string' && data.synopsis) ||
+            '';
+          const posterUrl = typeof data.posterUrl === 'string' ? data.posterUrl : '';
+
+          return {
+            id: docSnap.id,
+            title: typeof data.title === 'string' ? data.title : 'Untitled Movie',
+            genre: (typeof data.genre === 'string' ? data.genre : 'Action') as Genre,
+            year: Number(data.year) || new Date().getFullYear(),
+            duration: typeof data.duration === 'string' ? data.duration : '1h 45m',
+            rating: rawRating,
+            rating5,
+            ratingsCount: typeof data.ratingsCount === 'number' ? data.ratingsCount : 0,
+            userRating: userRatings[docSnap.id],
+            ageRating: (typeof data.ageRating === 'string' ? data.ageRating : '16+') as Movie['ageRating'],
+            quality: (typeof data.quality === 'string' ? data.quality : '1080p FHD') as Movie['quality'],
+            posterUrl,
+            backdropUrl:
+              (typeof data.backdropUrl === 'string' && data.backdropUrl) || posterUrl,
+            description: descriptionText,
+            synopsis: descriptionText,
+            director: typeof data.director === 'string' ? data.director : '',
+            cast: Array.isArray(data.cast) ? (data.cast as string[]) : [],
+            videoUrl: typeof data.videoUrl === 'string' ? data.videoUrl : '',
+            trailerUrl: typeof data.trailerUrl === 'string' ? data.trailerUrl : undefined,
+            fileSizeMb: typeof data.fileSizeMb === 'number' ? data.fileSizeMb : 450,
+            isTrending: Boolean(data.isTrending),
+            isFeatured: Boolean(data.isFeatured),
+            isUgandanExclusive: Boolean(data.isUgandanExclusive),
+            vjTracks: Array.isArray(data.vjTracks) ? (data.vjTracks as VJTrack[]) : [],
+            viewsCount: typeof data.viewsCount === 'number' ? data.viewsCount : 0,
+            createdAt: parseTimestampMs(data.createdAt),
+          };
+        });
+
+        loadedMovies.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+        setMovies(loadedMovies);
+        setMoviesLoading(false);
+        setFirestoreError(null);
+      },
+      (error) => {
+        const info = buildFirestoreErrorInfo(error, OperationType.LIST, 'movies');
+        console.error('Firestore Movies Error:', JSON.stringify(info));
+        setFirestoreError(
+          error instanceof Error
+            ? error.message
+            : 'Unable to load movies from Firestore. Check Firestore rules.'
+        );
+        setMovies([]);
+        setMoviesLoading(false);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [userRatings]);
+
+  // 3. Real-time Firestore listener for "tvshows" collection
+  useEffect(() => {
+    const showsRef = collection(db, 'tvshows');
+    const unsubscribe = onSnapshot(
+      showsRef,
+      (snapshot) => {
+        const loadedShows: TVShow[] = snapshot.docs.map((docSnap) => {
+          const data = docSnap.data() as Record<string, unknown>;
+          return {
+            id: docSnap.id,
+            title: typeof data.title === 'string' ? data.title : 'Untitled Series',
+            genre: (typeof data.genre === 'string' ? data.genre : 'Drama') as Genre,
+            year: Number(data.year) || new Date().getFullYear(),
+            rating: Number(data.rating) || 8.5,
+            ageRating: (typeof data.ageRating === 'string' ? data.ageRating : '16+') as TVShow['ageRating'],
+            quality: (typeof data.quality === 'string' ? data.quality : '1080p FHD') as TVShow['quality'],
+            posterUrl: typeof data.posterUrl === 'string' ? data.posterUrl : '',
+            backdropUrl:
+              (typeof data.backdropUrl === 'string' && data.backdropUrl) ||
+              (typeof data.posterUrl === 'string' ? data.posterUrl : ''),
+            synopsis: typeof data.synopsis === 'string' ? data.synopsis : '',
+            creator: typeof data.creator === 'string' ? data.creator : 'MovieKart UG',
+            cast: Array.isArray(data.cast) ? (data.cast as string[]) : [],
+            isTrending: Boolean(data.isTrending),
+            isFeatured: Boolean(data.isFeatured),
+            isUgandanExclusive: Boolean(data.isUgandanExclusive),
+            vjTracks: Array.isArray(data.vjTracks) ? (data.vjTracks as VJTrack[]) : [],
+            seasons: Array.isArray(data.seasons) ? (data.seasons as TVShow['seasons']) : [],
+            viewsCount: typeof data.viewsCount === 'number' ? data.viewsCount : 0,
+          };
+        });
+        setTvShows(loadedShows);
+        setTvShowsLoading(false);
+      },
+      (error) => {
+        const info = buildFirestoreErrorInfo(error, OperationType.LIST, 'tvshows');
+        console.warn('Firestore TV Shows listener:', JSON.stringify(info));
+        setTvShows([]);
+        setTvShowsLoading(false);
+      }
+    );
+
+    return () => unsubscribe();
+  }, []);
+
+  // Keep selectedMovieForDetails synced if live Firestore data updates
+  useEffect(() => {
+    if (selectedMovieForDetails) {
+      const latest = movies.find((m) => m.id === selectedMovieForDetails.id);
+      if (latest) {
+        setSelectedMovieForDetails(latest);
+      }
+    }
+  }, [movies, selectedMovieForDetails?.id]);
+
+  // Sync local preferences
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEYS.CONTENT_MODE, contentMode);
-    } catch (e) {
-      console.warn('Storage error', e);
-    }
+    } catch {}
   }, [contentMode]);
 
   useEffect(() => {
     try {
-      localStorage.setItem(STORAGE_KEYS.MOVIES, JSON.stringify(movies));
-    } catch (e) {
-      console.warn('Storage error', e);
-    }
-  }, [movies]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEYS.TV_SHOWS, JSON.stringify(tvShows));
-    } catch (e) {
-      console.warn('Storage error', e);
-    }
-  }, [tvShows]);
-
-  useEffect(() => {
-    try {
       localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
-    } catch (e) {
-      console.warn('Storage error', e);
-    }
+    } catch {}
   }, [users]);
 
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEYS.WATCHLIST, JSON.stringify(watchlist));
-    } catch (e) {
-      console.warn('Storage error', e);
-    }
+    } catch {}
   }, [watchlist]);
 
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEYS.DOWNLOADS, JSON.stringify(downloads));
-    } catch (e) {
-      console.warn('Storage error', e);
-    }
+    } catch {}
   }, [downloads]);
 
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEYS.OFFLINE, String(offlineMode));
-    } catch (e) {
-      console.warn('Storage error', e);
-    }
+    } catch {}
   }, [offlineMode]);
 
   useEffect(() => {
     try {
-      localStorage.setItem(STORAGE_KEYS.ADMIN_AUTH, String(isAdminAuthenticated));
-    } catch (e) {
-      console.warn('Storage error', e);
-    }
-  }, [isAdminAuthenticated]);
-
-  useEffect(() => {
-    try {
       localStorage.setItem(STORAGE_KEYS.CONTINUE_WATCHING, JSON.stringify(continueWatchingList));
-    } catch (e) {
-      console.warn('Storage error', e);
-    }
+    } catch {}
   }, [continueWatchingList]);
 
-  // Per-user isolated storage synchronization (Prompt Requirement: save user profile, watchlist, downloads, and continue watching for that user)
+  // Per-user isolated storage synchronization
   useEffect(() => {
     if (currentUser) {
       try {
         localStorage.setItem(`moviekart_ug_user_${currentUser.id}_watchlist`, JSON.stringify(watchlist));
-      } catch (e) {
-        console.warn('User watchlist storage error', e);
-      }
+      } catch {}
     }
   }, [watchlist, currentUser?.id]);
 
@@ -479,19 +544,18 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     if (currentUser) {
       try {
         localStorage.setItem(`moviekart_ug_user_${currentUser.id}_downloads`, JSON.stringify(downloads));
-      } catch (e) {
-        console.warn('User downloads storage error', e);
-      }
+      } catch {}
     }
   }, [downloads, currentUser?.id]);
 
   useEffect(() => {
     if (currentUser) {
       try {
-        localStorage.setItem(`moviekart_ug_user_${currentUser.id}_continue_watching`, JSON.stringify(continueWatchingList));
-      } catch (e) {
-        console.warn('User continue watching storage error', e);
-      }
+        localStorage.setItem(
+          `moviekart_ug_user_${currentUser.id}_continue_watching`,
+          JSON.stringify(continueWatchingList)
+        );
+      } catch {}
     }
   }, [continueWatchingList, currentUser?.id]);
 
@@ -500,19 +564,15 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       try {
         localStorage.setItem(STORAGE_KEYS.CURRENT_USER_ID, currentUser.id);
         localStorage.setItem(`moviekart_ug_user_${currentUser.id}_profile`, JSON.stringify(currentUser));
-      } catch (e) {
-        console.warn('User session storage error', e);
-      }
+      } catch {}
     } else {
       try {
         localStorage.removeItem(STORAGE_KEYS.CURRENT_USER_ID);
-      } catch (e) {
-        console.warn('User session clear error', e);
-      }
+      } catch {}
     }
   }, [currentUser]);
 
-  // Handle active downloads ticking simulation
+  // Handle active offline downloads progression
   useEffect(() => {
     const hasActiveDownloads = downloads.some((d) => d.status === 'downloading');
     if (!hasActiveDownloads) return;
@@ -564,7 +624,18 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const isInWatchlist = (id: string) => watchlist.includes(id);
 
   const startDownload = (
-    item: Movie | { id: string; title: string; genre: string; posterUrl: string; videoUrl: string; fileSizeMb?: number; isEpisode?: boolean; episodeTitle?: string },
+    item:
+      | Movie
+      | {
+          id: string;
+          title: string;
+          genre: string;
+          posterUrl: string;
+          videoUrl: string;
+          fileSizeMb?: number;
+          isEpisode?: boolean;
+          episodeTitle?: string;
+        },
     quality: string = '1080p FHD'
   ) => {
     const existing = downloads.find((d) => d.movieId === item.id);
@@ -626,7 +697,6 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     return downloads.find((d) => d.movieId === id);
   };
 
-  // Play a movie
   const playMovie = (movie: Movie, vjTrackId?: string) => {
     if (offlineMode) {
       const isDownloaded = downloads.some((d) => d.movieId === movie.id && d.status === 'completed');
@@ -655,42 +725,27 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     });
   };
 
-  // Play high-energy teaser trailer
   const playTrailer = (movie: Movie) => {
-    // Select high-energy teaser trailer URL
-    let trailerUrl = movie.trailerUrl;
-    if (!trailerUrl) {
-      if (movie.genre === 'Comedy') {
-        trailerUrl = 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4';
-      } else if (movie.genre === 'Action' || movie.genre === 'Sci-Fi' || movie.genre === 'Thriller') {
-        trailerUrl = 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4';
-      } else if (movie.genre === 'Ugandan Hits') {
-        trailerUrl = 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4';
-      } else {
-        trailerUrl = 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4';
-      }
-    }
-
+    const trailerUrl = movie.trailerUrl || movie.videoUrl;
     const defaultTrack = movie.vjTracks?.find((t) => t.isDefault) || movie.vjTracks?.[0] || null;
     setSelectedVJTrack(defaultTrack);
     setCurrentlyPlayingItem({
       id: `${movie.id}_trailer`,
       movieId: movie.id,
       title: `${movie.title} (Official Teaser)`,
-      subTitle: 'Official 4K Teaser Trailer',
+      subTitle: 'Official Teaser Preview',
       videoUrl: trailerUrl,
       posterUrl: movie.posterUrl,
       backdropUrl: movie.backdropUrl,
       year: movie.year,
-      quality: '4K Teaser',
+      quality: movie.quality || 'HD Teaser',
       isTrailer: true,
       vjTracks: movie.vjTracks,
       fileSizeMb: 45
     });
-    showToast(`Playing "${movie.title}" Official Trailer`);
+    showToast(`Playing "${movie.title}" Trailer`);
   };
 
-  // Play an episode of a TV show
   const playEpisode = (show: TVShow, seasonNumber: number, episode: Episode, vjTrackId?: string) => {
     if (offlineMode) {
       const isDownloaded = downloads.some((d) => d.movieId === episode.id && d.status === 'completed');
@@ -723,7 +778,6 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     });
   };
 
-  // Resume an item from Continue Watching row
   const resumeContinueWatching = (item: ContinueWatchingItem) => {
     if (offlineMode) {
       const isDownloaded = downloads.some((d) => d.movieId === item.itemId && d.status === 'completed');
@@ -744,16 +798,15 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         id: item.itemId,
         movieId: item.itemId,
         title: item.title,
-        videoUrl: item.videoUrl,
-        posterUrl: item.thumbnailUrl,
-        backdropUrl: item.backdropUrl,
+        videoUrl: targetMovie?.videoUrl || item.videoUrl,
+        posterUrl: targetMovie?.posterUrl || item.thumbnailUrl,
+        backdropUrl: targetMovie?.backdropUrl || item.backdropUrl,
         year: targetMovie?.year,
         quality: targetMovie?.quality || '1080p FHD',
         startTime: item.currentTime,
         vjTracks: targetMovie?.vjTracks
       });
     } else {
-      // TV Episode
       const targetShow = tvShows.find(
         (s) =>
           s.title === item.showTitle ||
@@ -790,7 +843,6 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     showToast(`Resuming "${item.title}" at ${mins}:${secs < 10 ? '0' : ''}${secs}`);
   };
 
-  // Update watch progress in Continue Watching row
   const updateWatchProgress = (params: {
     id: string;
     itemId: string;
@@ -814,7 +866,6 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     const duration = params.duration > 0 ? params.duration : 1;
     const progressPercentage = Math.min(100, Math.round((params.currentTime / duration) * 100));
 
-    // If watched >= 95%, remove from continue watching
     if (progressPercentage >= 95) {
       setContinueWatchingList((prev) => prev.filter((item) => item.id !== params.id));
       return;
@@ -879,124 +930,229 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     setSelectedShowForDetails(null);
   };
 
-  // 5-Star Rating System
-  const rateMovie = (movieId: string, rating: number) => {
+  // 5-Star Rating System (synced with Firestore when permitted)
+  const rateMovie = async (movieId: string, rating: number) => {
     const clampedRating = Math.max(1, Math.min(5, Math.round(rating)));
 
     setUserRatings((prev) => {
       const updated = { ...prev, [movieId]: clampedRating };
       try {
         localStorage.setItem(STORAGE_KEYS.USER_RATINGS, JSON.stringify(updated));
-      } catch (e) {
-        console.warn('Rating storage error', e);
-      }
+      } catch {}
       return updated;
     });
 
-    setMovies((prevMovies) =>
-      prevMovies.map((m) => {
-        if (m.id !== movieId) return m;
+    const targetMovie = movies.find((m) => m.id === movieId);
+    if (!targetMovie) return;
 
-        const previousRating = m.userRating ?? userRatings[movieId];
-        const currentCount = m.ratingsCount ?? (Math.floor(m.rating * 35) + 60);
-        const currentAvg = m.rating5 ?? +(m.rating / 2).toFixed(1);
+    const previousRating = targetMovie.userRating ?? userRatings[movieId];
+    const currentCount = targetMovie.ratingsCount ?? 0;
+    const currentAvg = targetMovie.rating5 ?? +(targetMovie.rating / 2).toFixed(1);
 
-        let newAvg: number;
-        let newCount: number;
+    let newAvg: number;
+    let newCount: number;
 
-        if (previousRating !== undefined) {
-          const totalPoints = currentAvg * currentCount - previousRating + clampedRating;
-          newCount = currentCount;
-          newAvg = +(totalPoints / newCount).toFixed(1);
-        } else {
-          const totalPoints = currentAvg * currentCount + clampedRating;
-          newCount = currentCount + 1;
-          newAvg = +(totalPoints / newCount).toFixed(1);
-        }
+    if (previousRating !== undefined && currentCount > 0) {
+      const totalPoints = currentAvg * currentCount - previousRating + clampedRating;
+      newCount = currentCount;
+      newAvg = +(totalPoints / newCount).toFixed(1);
+    } else {
+      const totalPoints = currentAvg * currentCount + clampedRating;
+      newCount = currentCount + 1;
+      newAvg = +(totalPoints / newCount).toFixed(1);
+    }
 
-        newAvg = Math.max(1.0, Math.min(5.0, newAvg));
+    newAvg = Math.max(1.0, Math.min(5.0, newAvg));
+    const newRating10 = +(newAvg * 2).toFixed(1);
 
-        const updatedMovie: Movie = {
-          ...m,
-          rating5: newAvg,
-          rating: +(newAvg * 2).toFixed(1),
-          ratingsCount: newCount,
-          userRating: clampedRating
-        };
+    const updatedMovie: Movie = {
+      ...targetMovie,
+      rating5: newAvg,
+      rating: newRating10,
+      ratingsCount: newCount,
+      userRating: clampedRating
+    };
 
-        if (selectedMovieForDetails?.id === movieId) {
-          setSelectedMovieForDetails(updatedMovie);
-        }
+    setMovies((prev) => prev.map((m) => (m.id === movieId ? updatedMovie : m)));
+    if (selectedMovieForDetails?.id === movieId) {
+      setSelectedMovieForDetails(updatedMovie);
+    }
+    showToast(`You rated "${targetMovie.title}" ${clampedRating} stars! (Average: ★ ${newAvg.toFixed(1)}/5)`);
 
-        showToast(`You rated "${m.title}" ${clampedRating} stars! (Average: ★ ${newAvg.toFixed(1)}/5)`);
-        return updatedMovie;
-      })
-    );
+    try {
+      await updateDoc(doc(db, 'movies', movieId), {
+        rating: newRating10,
+        rating5: newAvg,
+        ratingsCount: newCount,
+      });
+    } catch (error) {
+      const info = buildFirestoreErrorInfo(error, OperationType.UPDATE, `movies/${movieId}`);
+      console.warn('Rating Firestore sync skipped or denied:', JSON.stringify(info));
+    }
   };
 
   const getUserRating = (movieId: string) => {
     return userRatings[movieId];
   };
 
-  // Admin authentication
-  const authenticateAdmin = (pin: string): boolean => {
-    if (pin === '1234' || pin === '9988') {
-      setIsAdminAuthenticated(true);
-      showToast('Admin Access Granted');
-      return true;
+  // Firebase Admin Authentication (Email & Password)
+  const loginAdminWithEmail = async (
+    email: string,
+    password: string
+  ): Promise<{ success: boolean; error?: string }> => {
+    try {
+      await signInWithEmailAndPassword(auth, email.trim(), password);
+      showToast('Admin signed in with Firebase Auth');
+      return { success: true };
+    } catch (error: unknown) {
+      const code = (error as { code?: string })?.code || '';
+      let message = 'Failed to sign in. Check your admin email and password.';
+      if (
+        code === 'auth/invalid-credential' ||
+        code === 'auth/wrong-password' ||
+        code === 'auth/user-not-found'
+      ) {
+        message = 'Invalid admin email or password.';
+      } else if (code === 'auth/too-many-requests') {
+        message = 'Too many failed attempts. Please wait a moment and try again.';
+      } else if (code === 'auth/invalid-email') {
+        message = 'Please enter a valid email address.';
+      } else if (error instanceof Error && error.message) {
+        message = error.message;
+      }
+      return { success: false, error: message };
     }
-    showToast('Incorrect Admin PIN. Access denied.');
-    return false;
   };
 
-  const logoutAdmin = () => {
-    setIsAdminAuthenticated(false);
-    showToast('Logged out of Admin');
+  const logoutAdmin = async () => {
+    try {
+      await signOut(auth);
+      showToast('Signed out of Admin');
+    } catch (error) {
+      console.error('Admin sign out error:', error);
+    }
   };
 
-  // Movie CRUD
-  const addMovie = (movieData: Omit<Movie, 'id'>) => {
-    const newMovie: Movie = {
-      ...movieData,
-      id: `m_${Date.now()}`,
+  // Firestore Movie CRUD (Admin only)
+  const addMovie = async (movieData: Omit<Movie, 'id'>) => {
+    if (!auth.currentUser) {
+      showToast('Admin sign-in required to add movies.');
+      throw new Error('Admin authentication required');
+    }
+
+    const descriptionText = (movieData.description || movieData.synopsis || '').trim();
+    const numericRating = Number(movieData.rating) || 8.0;
+    const rating5 = +(Math.min(5, Math.max(1, numericRating / 2))).toFixed(1);
+    const vjTracks =
+      movieData.vjTracks && movieData.vjTracks.length > 0
+        ? movieData.vjTracks
+        : [
+            {
+              id: `vj_${Date.now()}`,
+              name: 'VJ Junior',
+              language: 'Luganda',
+              isDefault: true,
+              commentaryQuotes: ['MovieKart UG Premiere!']
+            }
+          ];
+
+    const payload = {
+      title: movieData.title.trim(),
+      description: descriptionText,
+      synopsis: descriptionText,
+      genre: movieData.genre || 'Action',
+      posterUrl: movieData.posterUrl.trim(),
+      backdropUrl: (movieData.backdropUrl || movieData.posterUrl).trim(),
+      videoUrl: movieData.videoUrl.trim(),
+      year: Number(movieData.year) || new Date().getFullYear(),
+      rating: numericRating,
+      rating5,
+      ratingsCount: 0,
+      duration: movieData.duration || '1h 45m',
+      ageRating: movieData.ageRating || '16+',
+      quality: movieData.quality || '1080p FHD',
+      director: movieData.director || '',
+      cast: movieData.cast || [],
+      fileSizeMb: Number(movieData.fileSizeMb) || 450,
+      isTrending: Boolean(movieData.isTrending),
+      isFeatured: Boolean(movieData.isFeatured),
+      isUgandanExclusive: Boolean(movieData.isUgandanExclusive),
+      vjTracks,
       viewsCount: 0,
-      vjTracks: movieData.vjTracks && movieData.vjTracks.length > 0 ? movieData.vjTracks : [
-        {
-          id: 'vj_auto',
-          name: 'VJ Junior',
-          language: 'Luganda',
-          isDefault: true,
-          commentaryQuotes: ['Abasajja bano bazze!', 'Action packed!']
-        }
-      ]
+      createdAt: serverTimestamp(),
+      createdBy: auth.currentUser.uid,
     };
-    setMovies((prev) => [newMovie, ...prev]);
-    showToast(`Added movie: "${newMovie.title}"`);
+
+    try {
+      await addDoc(collection(db, 'movies'), payload);
+      showToast(`Published "${payload.title}" live to MovieKart UG!`);
+    } catch (error) {
+      const info = buildFirestoreErrorInfo(error, OperationType.CREATE, 'movies');
+      console.error('Firestore Add Movie Error:', JSON.stringify(info));
+      showToast('Failed to save movie to Firestore. Check permissions.');
+      throw error;
+    }
   };
 
-  const updateMovie = (updatedMovie: Movie) => {
-    setMovies((prev) => prev.map((m) => (m.id === updatedMovie.id ? updatedMovie : m)));
-    showToast(`Updated movie: "${updatedMovie.title}"`);
+  const updateMovie = async (updatedMovie: Movie) => {
+    if (!auth.currentUser) {
+      showToast('Admin sign-in required to update movies.');
+      throw new Error('Admin authentication required');
+    }
+
+    const descriptionText = (updatedMovie.description || updatedMovie.synopsis || '').trim();
+    const numericRating = Number(updatedMovie.rating) || 8.0;
+
+    try {
+      await updateDoc(doc(db, 'movies', updatedMovie.id), {
+        title: updatedMovie.title.trim(),
+        description: descriptionText,
+        synopsis: descriptionText,
+        genre: updatedMovie.genre,
+        posterUrl: updatedMovie.posterUrl.trim(),
+        backdropUrl: (updatedMovie.backdropUrl || updatedMovie.posterUrl).trim(),
+        videoUrl: updatedMovie.videoUrl.trim(),
+        year: Number(updatedMovie.year),
+        rating: numericRating,
+        rating5: +(Math.min(5, Math.max(1, numericRating / 2))).toFixed(1),
+        duration: updatedMovie.duration,
+        ageRating: updatedMovie.ageRating,
+        quality: updatedMovie.quality,
+        director: updatedMovie.director,
+        cast: updatedMovie.cast,
+        fileSizeMb: Number(updatedMovie.fileSizeMb) || 450,
+        isTrending: Boolean(updatedMovie.isTrending),
+        isFeatured: Boolean(updatedMovie.isFeatured),
+        isUgandanExclusive: Boolean(updatedMovie.isUgandanExclusive),
+        vjTracks: updatedMovie.vjTracks || [],
+      });
+      showToast(`Updated "${updatedMovie.title}"`);
+    } catch (error) {
+      const info = buildFirestoreErrorInfo(error, OperationType.UPDATE, `movies/${updatedMovie.id}`);
+      console.error('Firestore Update Movie Error:', JSON.stringify(info));
+      showToast('Failed to update movie in Firestore.');
+      throw error;
+    }
   };
 
-  const deleteMovie = (movieId: string) => {
-    setMovies((prev) => prev.filter((m) => m.id !== movieId));
-    showToast('Movie deleted from catalog');
+  const deleteMovie = async (movieId: string) => {
+    if (!auth.currentUser) {
+      showToast('Admin sign-in required to delete movies.');
+      return;
+    }
+
+    try {
+      await deleteDoc(doc(db, 'movies', movieId));
+      showToast('Movie deleted from Firestore');
+    } catch (error) {
+      const info = buildFirestoreErrorInfo(error, OperationType.DELETE, `movies/${movieId}`);
+      console.error('Firestore Delete Movie Error:', JSON.stringify(info));
+      showToast('Failed to delete movie from Firestore.');
+    }
   };
 
-  // TV Show CRUD
-  const addTVShow = (showData: Omit<TVShow, 'id'>) => {
-    const newShow: TVShow = {
-      ...showData,
-      id: `tv_${Date.now()}`,
-      viewsCount: 0,
-    };
-    setTvShows((prev) => [newShow, ...prev]);
-    showToast(`Added TV Show: "${newShow.title}"`);
-  };
-
-  // Admin: Add or update TV show episode
-  const addEpisodeToShow = (params: {
+  // Firestore TV Show CRUD (Admin only)
+  const addEpisodeToShow = async (params: {
     showTitle: string;
     posterUrl?: string;
     seasonNumber: number;
@@ -1006,6 +1162,11 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     duration?: string;
     synopsis?: string;
   }) => {
+    if (!auth.currentUser) {
+      showToast('Admin sign-in required to add TV episodes.');
+      throw new Error('Admin authentication required');
+    }
+
     const normalizedTitle = params.showTitle.trim();
     const existingShow = tvShows.find(
       (s) => s.title.toLowerCase() === normalizedTitle.toLowerCase()
@@ -1016,91 +1177,104 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       episodeNumber: Number(params.episodeNumber),
       title: params.episodeTitle.trim(),
       duration: params.duration || '42m',
-      thumbnailUrl: params.posterUrl || 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?auto=format&fit=crop&w=600&q=80',
+      thumbnailUrl: params.posterUrl || '',
       videoUrl: params.videoUrl.trim(),
       synopsis: params.synopsis || `Episode ${params.episodeNumber} of ${normalizedTitle}`,
       fileSizeMb: 240
     };
 
-    if (existingShow) {
-      // Find or create season
-      const seasonNum = Number(params.seasonNumber);
-      const updatedSeasons = [...existingShow.seasons];
-      const seasonIndex = updatedSeasons.findIndex((s) => s.seasonNumber === seasonNum);
+    try {
+      if (existingShow) {
+        const seasonNum = Number(params.seasonNumber);
+        const updatedSeasons = existingShow.seasons.map((s) => ({
+          ...s,
+          episodes: [...s.episodes]
+        }));
+        const seasonIndex = updatedSeasons.findIndex((s) => s.seasonNumber === seasonNum);
 
-      if (seasonIndex >= 0) {
-        // Append or replace episode
-        const season = updatedSeasons[seasonIndex];
-        const epIndex = season.episodes.findIndex((e) => e.episodeNumber === newEp.episodeNumber);
-        if (epIndex >= 0) {
-          season.episodes[epIndex] = newEp;
+        if (seasonIndex >= 0) {
+          const season = updatedSeasons[seasonIndex];
+          const epIndex = season.episodes.findIndex((e) => e.episodeNumber === newEp.episodeNumber);
+          if (epIndex >= 0) {
+            season.episodes[epIndex] = newEp;
+          } else {
+            season.episodes.push(newEp);
+            season.episodes.sort((a, b) => a.episodeNumber - b.episodeNumber);
+          }
         } else {
-          season.episodes.push(newEp);
-          season.episodes.sort((a, b) => a.episodeNumber - b.episodeNumber);
-        }
-      } else {
-        // Add new season
-        updatedSeasons.push({
-          seasonNumber: seasonNum,
-          title: `Season ${seasonNum}`,
-          episodes: [newEp]
-        });
-        updatedSeasons.sort((a, b) => a.seasonNumber - b.seasonNumber);
-      }
-
-      setTvShows((prev) =>
-        prev.map((s) => (s.id === existingShow.id ? { ...s, seasons: updatedSeasons } : s))
-      );
-      showToast(`Added Season ${params.seasonNumber} Ep ${params.episodeNumber} to "${existingShow.title}"`);
-    } else {
-      // Create new TV show
-      const newShow: TVShow = {
-        id: `tv_${Date.now()}`,
-        title: normalizedTitle,
-        genre: 'Drama',
-        year: 2025,
-        rating: 8.8,
-        ageRating: '16+',
-        quality: '1080p FHD',
-        posterUrl: params.posterUrl || 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?auto=format&fit=crop&w=800&q=80',
-        backdropUrl: params.posterUrl || 'https://images.unsplash.com/photo-1544620347-c4fd4a3d5957?auto=format&fit=crop&w=1600&q=80',
-        synopsis: params.synopsis || `The compelling saga of ${normalizedTitle}.`,
-        creator: 'MovieKart UG Productions',
-        cast: ['Ugandan Ensemble'],
-        isTrending: true,
-        vjTracks: [
-          {
-            id: 'vj_jun',
-            name: 'VJ Junior',
-            language: 'Luganda',
-            isDefault: true,
-            commentaryQuotes: ['Abaana bano bazze!', 'Series eno ya kabi!']
-          }
-        ],
-        seasons: [
-          {
-            seasonNumber: Number(params.seasonNumber),
-            title: `Season ${params.seasonNumber}`,
+          updatedSeasons.push({
+            seasonNumber: seasonNum,
+            title: `Season ${seasonNum}`,
             episodes: [newEp]
-          }
-        ]
-      };
-      setTvShows((prev) => [newShow, ...prev]);
-      showToast(`Created new TV Show: "${newShow.title}" with Episode 1`);
+          });
+          updatedSeasons.sort((a, b) => a.seasonNumber - b.seasonNumber);
+        }
+
+        await updateDoc(doc(db, 'tvshows', existingShow.id), {
+          seasons: updatedSeasons
+        });
+        showToast(`Added Season ${params.seasonNumber} Ep ${params.episodeNumber} to "${existingShow.title}"`);
+      } else {
+        const newShowPayload = {
+          title: normalizedTitle,
+          genre: 'Drama',
+          year: new Date().getFullYear(),
+          rating: 8.8,
+          ageRating: '16+',
+          quality: '1080p FHD',
+          posterUrl: params.posterUrl || '',
+          backdropUrl: params.posterUrl || '',
+          synopsis: params.synopsis || `Series: ${normalizedTitle}`,
+          creator: 'MovieKart UG',
+          cast: [],
+          isTrending: true,
+          isFeatured: true,
+          vjTracks: [
+            {
+              id: 'vj_jun',
+              name: 'VJ Junior',
+              language: 'Luganda',
+              isDefault: true,
+              commentaryQuotes: ['MovieKart UG Series!']
+            }
+          ],
+          seasons: [
+            {
+              seasonNumber: Number(params.seasonNumber),
+              title: `Season ${params.seasonNumber}`,
+              episodes: [newEp]
+            }
+          ],
+          createdAt: serverTimestamp(),
+          createdBy: auth.currentUser.uid,
+        };
+        await addDoc(collection(db, 'tvshows'), newShowPayload);
+        showToast(`Created TV Show "${normalizedTitle}" in Firestore`);
+      }
+    } catch (error) {
+      const info = buildFirestoreErrorInfo(error, OperationType.WRITE, 'tvshows');
+      console.error('Firestore TV Show Error:', JSON.stringify(info));
+      showToast('Failed to save TV show to Firestore.');
+      throw error;
     }
   };
 
-  const updateTVShow = (updatedShow: TVShow) => {
-    setTvShows((prev) => prev.map((s) => (s.id === updatedShow.id ? updatedShow : s)));
-    showToast(`Updated TV Show: "${updatedShow.title}"`);
+  const deleteTVShow = async (showId: string) => {
+    if (!auth.currentUser) {
+      showToast('Admin sign-in required.');
+      return;
+    }
+    try {
+      await deleteDoc(doc(db, 'tvshows', showId));
+      showToast('TV Show deleted from Firestore');
+    } catch (error) {
+      const info = buildFirestoreErrorInfo(error, OperationType.DELETE, `tvshows/${showId}`);
+      console.error('Firestore Delete TV Show Error:', JSON.stringify(info));
+      showToast('Failed to delete TV show.');
+    }
   };
 
-  const deleteTVShow = (showId: string) => {
-    setTvShows((prev) => prev.filter((s) => s.id !== showId));
-    showToast('TV Show deleted from catalog');
-  };
-
-  // User CRUD
+  // User account local management
   const addUser = (userData: Omit<UserAccount, 'id'>) => {
     const newUser: UserAccount = {
       ...userData,
@@ -1123,40 +1297,22 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     showToast('User account deleted');
   };
 
-  // User Session & Authentication Helpers
+  // Viewer Session & Authentication Helpers (NO fake defaults)
   const activateUserSession = (user: UserAccount) => {
     setCurrentUser(user);
+    setActiveTab('home');
     try {
       localStorage.setItem(STORAGE_KEYS.CURRENT_USER_ID, user.id);
       localStorage.setItem(`moviekart_ug_user_${user.id}_profile`, JSON.stringify(user));
 
-      // 1. User's Watchlist
       const userWatchlist = localStorage.getItem(`moviekart_ug_user_${user.id}_watchlist`);
-      if (userWatchlist) {
-        setWatchlist(JSON.parse(userWatchlist));
-      } else {
-        const defaultWL = ['m1', 'tv1', 'm3'];
-        setWatchlist(defaultWL);
-        localStorage.setItem(`moviekart_ug_user_${user.id}_watchlist`, JSON.stringify(defaultWL));
-      }
+      setWatchlist(userWatchlist ? JSON.parse(userWatchlist) : []);
 
-      // 2. User's Downloads
       const userDownloads = localStorage.getItem(`moviekart_ug_user_${user.id}_downloads`);
-      if (userDownloads) {
-        setDownloads(JSON.parse(userDownloads));
-      } else {
-        setDownloads([]);
-        localStorage.setItem(`moviekart_ug_user_${user.id}_downloads`, JSON.stringify([]));
-      }
+      setDownloads(userDownloads ? JSON.parse(userDownloads) : []);
 
-      // 3. User's Continue Watching
       const userCW = localStorage.getItem(`moviekart_ug_user_${user.id}_continue_watching`);
-      if (userCW) {
-        setContinueWatchingList(JSON.parse(userCW));
-      } else {
-        setContinueWatchingList(DEFAULT_CONTINUE_WATCHING);
-        localStorage.setItem(`moviekart_ug_user_${user.id}_continue_watching`, JSON.stringify(DEFAULT_CONTINUE_WATCHING));
-      }
+      setContinueWatchingList(userCW ? JSON.parse(userCW) : []);
     } catch (e) {
       console.warn('Error activating user session', e);
     }
@@ -1172,7 +1328,10 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       try {
         localStorage.setItem(`moviekart_ug_user_${currentUser.id}_watchlist`, JSON.stringify(watchlist));
         localStorage.setItem(`moviekart_ug_user_${currentUser.id}_downloads`, JSON.stringify(downloads));
-        localStorage.setItem(`moviekart_ug_user_${currentUser.id}_continue_watching`, JSON.stringify(continueWatchingList));
+        localStorage.setItem(
+          `moviekart_ug_user_${currentUser.id}_continue_watching`,
+          JSON.stringify(continueWatchingList)
+        );
         localStorage.setItem(`moviekart_ug_user_${currentUser.id}_profile`, JSON.stringify(currentUser));
       } catch {}
     }
@@ -1181,17 +1340,14 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     try {
       localStorage.removeItem(STORAGE_KEYS.CURRENT_USER_ID);
     } catch {}
-    setActiveTab('home');
+    setActiveTab('profile');
     showToast('Signed out of MovieKart UG');
   };
 
-  // Option 1: Sign up with Google (1 click)
   const signUpWithGoogle = (customData?: { name?: string; email?: string; avatar?: string }) => {
     const email = customData?.email || 'quraishmino927@gmail.com';
-    const name = customData?.name || 'Quraish Mino';
-    const avatar =
-      customData?.avatar ||
-      'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=200&q=80';
+    const name = customData?.name || 'MovieKart Viewer';
+    const avatar = customData?.avatar || '/pwa-192x192.png';
 
     let existingUser = users.find((u) => u.email.toLowerCase() === email.toLowerCase());
     if (!existingUser) {
@@ -1199,7 +1355,7 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         id: `u_google_${Date.now()}`,
         name,
         email,
-        phone: '+256 700 892011',
+        phone: '+256 700 000000',
         avatar,
         authProvider: 'google',
         subscription: 'MovieKart VIP',
@@ -1217,7 +1373,6 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     showToast(`Signed in with Google as ${existingUser.name}`);
   };
 
-  // Option 2: Sign up with Phone Number
   const signUpWithPhone = (
     phoneNumber: string,
     name: string,
@@ -1234,7 +1389,7 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         name: displayName,
         email: `${cleanDigits.slice(-6)}@moviekart.ug`,
         phone: formattedPhone,
-        avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=200&q=80',
+        avatar: '/pwa-192x192.png',
         authProvider: 'phone',
         subscription: 'MovieKart VIP',
         status: 'active',
@@ -1251,7 +1406,6 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     showToast(`Signed up with ${momoProvider}! Welcome, ${existingUser.name}`);
   };
 
-  // Option 3: Sign up with Email and Password
   const signUpWithEmail = (
     email: string,
     password: string,
@@ -1283,8 +1437,8 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       id: `u_email_${Date.now()}`,
       name: displayName,
       email: cleanEmail,
-      phone: '+256 772 100200',
-      avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=200&q=80',
+      phone: '',
+      avatar: '/pwa-192x192.png',
       authProvider: 'email',
       subscription: 'MovieKart VIP',
       status: 'active',
@@ -1320,7 +1474,19 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
 
   const continueAsGuest = () => {
-    const guestUser = users[0] || INITIAL_USERS[0];
+    const guestUser: UserAccount = users[0] || {
+      id: 'guest_viewer',
+      name: 'Guest Viewer',
+      email: 'guest@moviekart.ug',
+      phone: '',
+      avatar: '/pwa-192x192.png',
+      subscription: 'Free Pass',
+      status: 'active',
+      joinedDate: 'Just now',
+      momoProvider: 'MTN Mobile Money',
+      storageUsedMb: 0,
+      downloadsCount: 0
+    };
     activateUserSession(guestUser);
     showToast('Browsing MovieKart UG catalog as Guest');
   };
@@ -1331,7 +1497,10 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         contentMode,
         setContentMode,
         movies,
+        moviesLoading,
+        firestoreError,
         tvShows,
+        tvShowsLoading,
         users,
         currentUser,
         isAuthenticated,
@@ -1346,6 +1515,8 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         selectedShowForDetails,
         currentlyPlayingItem,
         selectedVJTrack,
+        adminUser,
+        adminAuthLoading,
         isAdminAuthenticated,
         toastMessage,
         setActiveTab,
@@ -1382,14 +1553,12 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         continueAsGuest,
         logoutUser,
         switchUserAccount,
-        authenticateAdmin,
+        loginAdminWithEmail,
         logoutAdmin,
         addMovie,
         updateMovie,
         deleteMovie,
-        addTVShow,
         addEpisodeToShow,
-        updateTVShow,
         deleteTVShow,
         addUser,
         updateUser,

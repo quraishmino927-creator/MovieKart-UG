@@ -6,8 +6,9 @@ import { Movie } from '../types';
 export const HeroCarousel: React.FC = () => {
   const { movies, playMovie, toggleWatchlist, isInWatchlist, openMovieDetails, offlineMode, downloads } = useMovieContext();
   
-  // Select featured movies or trending movies
-  const featuredMovies: Movie[] = movies.filter((m) => m.isFeatured || m.isTrending).slice(0, 5);
+  // Select featured/trending movies, or fallback to latest uploaded movies
+  const flaggedMovies = movies.filter((m) => m.isFeatured || m.isTrending);
+  const featuredMovies: Movie[] = (flaggedMovies.length > 0 ? flaggedMovies : movies).slice(0, 5);
   const [currentIndex, setCurrentIndex] = useState(0);
 
   useEffect(() => {

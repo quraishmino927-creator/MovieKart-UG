@@ -4,10 +4,10 @@ import {
   Smartphone,
   Users,
   Sparkles,
-  Wifi,
-  Radio,
   SlidersHorizontal,
-  LogOut
+  LogOut,
+  MessageCircle,
+  ExternalLink
 } from 'lucide-react';
 import { PWAInstallButton } from './PWAInstallButton';
 
@@ -56,7 +56,7 @@ export const ProfileView: React.FC = () => {
               </span>
             </div>
             <p className="text-xs text-gray-400">{currentUser.email}</p>
-            <p className="text-xs text-gray-400">{currentUser.phone}</p>
+            {currentUser.phone && <p className="text-xs text-gray-400">{currentUser.phone}</p>}
           </div>
         </div>
 
@@ -73,45 +73,47 @@ export const ProfileView: React.FC = () => {
         </div>
       </div>
 
-      {/* Switch Profile Strip */}
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h3 className="text-sm font-bold text-gray-300 uppercase tracking-wider flex items-center gap-2">
-            <Users className="w-4 h-4 text-red-500" />
-            Switch Active User Profile
-          </h3>
-          <span className="text-xs text-gray-400">Multi-Account Support</span>
-        </div>
+      {/* Switch Profile Strip (shown only when saved accounts exist) */}
+      {users.length > 0 && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-bold text-gray-300 uppercase tracking-wider flex items-center gap-2">
+              <Users className="w-4 h-4 text-red-500" />
+              Switch Active User Profile
+            </h3>
+            <span className="text-xs text-gray-400">Multi-Account Support</span>
+          </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {users.map((u) => {
-            const isSelected = u.id === currentUser.id;
-            return (
-              <button
-                key={u.id}
-                onClick={() => {
-                  switchUserAccount(u);
-                }}
-                className={`p-3 rounded-2xl border text-left flex items-center gap-2.5 transition-all cursor-pointer ${
-                  isSelected
-                    ? 'bg-red-950/40 border-red-500 text-white shadow-md shadow-red-600/10'
-                    : 'bg-[#121217] border-white/5 hover:border-white/10 text-gray-300'
-                }`}
-              >
-                <img
-                  src={u.avatar}
-                  alt={u.name}
-                  className="w-10 h-10 rounded-xl object-cover shrink-0"
-                />
-                <div className="min-w-0">
-                  <p className="text-xs font-bold text-white truncate">{u.name}</p>
-                  <p className="text-[10px] text-gray-400 truncate">{u.subscription}</p>
-                </div>
-              </button>
-            );
-          })}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {users.map((u) => {
+              const isSelected = u.id === currentUser.id;
+              return (
+                <button
+                  key={u.id}
+                  onClick={() => {
+                    switchUserAccount(u);
+                  }}
+                  className={`p-3 rounded-2xl border text-left flex items-center gap-2.5 transition-all cursor-pointer ${
+                    isSelected
+                      ? 'bg-red-950/40 border-red-500 text-white shadow-md shadow-red-600/10'
+                      : 'bg-[#121217] border-white/5 hover:border-white/10 text-gray-300'
+                  }`}
+                >
+                  <img
+                    src={u.avatar}
+                    alt={u.name}
+                    className="w-10 h-10 rounded-xl object-cover shrink-0"
+                  />
+                  <div className="min-w-0">
+                    <p className="text-xs font-bold text-white truncate">{u.name}</p>
+                    <p className="text-[10px] text-gray-400 truncate">{u.subscription}</p>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Playback & Download Preferences */}
       <div className="p-5 sm:p-6 rounded-3xl bg-[#121217] border border-white/5 space-y-4">
@@ -181,6 +183,29 @@ export const ProfileView: React.FC = () => {
             </button>
           </div>
         </div>
+      </div>
+
+      {/* WhatsApp Support Card */}
+      <div className="p-5 sm:p-6 rounded-3xl bg-[#121217] border border-emerald-500/20 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+        <div>
+          <h3 className="text-sm font-bold text-white flex items-center gap-2">
+            <MessageCircle className="w-4 h-4 text-[#25D366]" />
+            MovieKart UG WhatsApp Support
+          </h3>
+          <p className="text-xs text-gray-400 mt-1">
+            Need help with a movie request, playback issue, or Mobile Money? Chat with our support team on WhatsApp.
+          </p>
+        </div>
+
+        <a
+          href="https://wa.me/256700000000?text=Hello%20MovieKart%20UG%20Support%2C%20I%20need%20assistance%20with%20streaming."
+          target="_blank"
+          rel="noopener noreferrer"
+          className="w-full sm:w-auto px-5 py-2.5 bg-[#25D366] hover:bg-[#1ebe5d] text-black rounded-xl text-xs sm:text-sm font-extrabold transition-all shadow-md flex items-center justify-center gap-2 shrink-0 active:scale-95"
+        >
+          <span>Chat on WhatsApp</span>
+          <ExternalLink className="w-3.5 h-3.5" />
+        </a>
       </div>
 
       {/* In-App PWA Install Card */}

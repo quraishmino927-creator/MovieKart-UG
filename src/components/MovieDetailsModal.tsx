@@ -28,6 +28,7 @@ export const MovieDetailsModal: React.FC = () => {
     startDownload,
     getDownloadStatus,
     rateMovie,
+    openMovieDetails,
     movies,
     showToast
   } = useMovieContext();
@@ -241,7 +242,7 @@ export const MovieDetailsModal: React.FC = () => {
                     out of 5.0
                   </span>
                   <span className="text-[10px] text-gray-400 font-mono mt-0.5">
-                    {movie.ratingsCount || 120} ratings
+                    {movie.ratingsCount || 0} ratings
                   </span>
                 </div>
 
@@ -390,19 +391,22 @@ export const MovieDetailsModal: React.FC = () => {
             </p>
           </div>
 
-          {/* Cast & Director */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-white/5 text-xs sm:text-sm">
-            <div>
-              <span className="text-gray-400 font-medium block mb-1">Director</span>
-              <p className="text-white font-semibold">{movie.director || 'Nabwana I.G.G.'}</p>
+          { (movie.director || (movie.cast && movie.cast.length > 0)) && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-white/5 text-xs sm:text-sm">
+              {movie.director && (
+                <div>
+                  <span className="text-gray-400 font-medium block mb-1">Director</span>
+                  <p className="text-white font-semibold">{movie.director}</p>
+                </div>
+              )}
+              {movie.cast && movie.cast.length > 0 && (
+                <div>
+                  <span className="text-gray-400 font-medium block mb-1">Starring Cast</span>
+                  <p className="text-white font-semibold">{movie.cast.join(', ')}</p>
+                </div>
+              )}
             </div>
-            <div>
-              <span className="text-gray-400 font-medium block mb-1">Starring Cast</span>
-              <p className="text-white font-semibold">
-                {movie.cast && movie.cast.length > 0 ? movie.cast.join(', ') : 'Leading Cast'}
-              </p>
-            </div>
-          </div>
+          )}
 
           {/* Download Quality Preference */}
           <div className="pt-2 border-t border-white/5 flex flex-wrap items-center justify-between gap-2 text-xs">
@@ -434,10 +438,7 @@ export const MovieDetailsModal: React.FC = () => {
                 {relatedMovies.map((rel) => (
                   <div
                     key={rel.id}
-                    onClick={() => {
-                      const { openMovieDetails } = useMovieContext();
-                      openMovieDetails(rel);
-                    }}
+                    onClick={() => openMovieDetails(rel)}
                     className="group cursor-pointer rounded-xl bg-[#14141c] overflow-hidden border border-white/5 hover:border-red-500/50 transition-all"
                   >
                     <div className="aspect-[2/3] w-full overflow-hidden bg-black/40">

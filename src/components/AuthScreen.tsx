@@ -582,33 +582,6 @@ export const AuthScreen: React.FC = () => {
               </form>
             </div>
           )}
-
-          {/* Quick Demo Profiles Switcher */}
-          <div className="pt-4 border-t border-white/10 space-y-2.5">
-            <div className="flex items-center justify-between text-[11px] text-gray-400">
-              <span className="font-semibold text-gray-300">Or pick a demo profile:</span>
-              <span className="text-red-400 font-medium">Instant Access</span>
-            </div>
-
-            <div className="grid grid-cols-3 gap-2">
-              {users.slice(0, 3).map((u) => (
-                <button
-                  key={u.id}
-                  type="button"
-                  onClick={() => switchUserAccount(u)}
-                  className="p-2 rounded-xl bg-[#14141f] border border-white/5 hover:border-red-500/50 hover:bg-[#1a1a28] text-left transition-all group cursor-pointer"
-                >
-                  <img
-                    src={u.avatar}
-                    alt={u.name}
-                    className="w-8 h-8 rounded-lg object-cover mb-1.5 ring-1 ring-white/10 group-hover:ring-red-500"
-                  />
-                  <p className="text-[11px] font-bold text-white truncate leading-tight">{u.name}</p>
-                  <p className="text-[9px] text-gray-400 truncate">{u.authProvider || 'VIP'}</p>
-                </button>
-              ))}
-            </div>
-          </div>
         </div>
       </main>
 

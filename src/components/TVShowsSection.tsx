@@ -2,12 +2,46 @@ import React, { useState } from 'react';
 import { useMovieContext } from '../context/MovieContext';
 import { TVShowCard } from './TVShowCard';
 import { ContinueWatchingRow } from './ContinueWatchingRow';
-import { TVShow, Genre } from '../types';
-import { Tv, Sparkles, Flame, Volume2, Play, Layers } from 'lucide-react';
+import { Genre } from '../types';
+import { Tv, Volume2, Play, Loader2 } from 'lucide-react';
 
 export const TVShowsSection: React.FC = () => {
-  const { tvShows, selectedGenre, setSelectedGenre, openShowDetails } = useMovieContext();
+  const { tvShows, tvShowsLoading, selectedGenre, setSelectedGenre, openShowDetails } = useMovieContext();
   const [filterVJOnly, setFilterVJOnly] = useState(false);
+
+  if (tvShowsLoading) {
+    return (
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-28 flex flex-col items-center justify-center text-center">
+        <div className="w-16 h-16 rounded-2xl bg-red-600/15 border border-red-500/30 flex items-center justify-center mb-4">
+          <Loader2 className="w-8 h-8 text-red-500 animate-spin" />
+        </div>
+        <h2 className="text-lg sm:text-xl font-extrabold text-white font-['Outfit']">
+          Loading TV Shows...
+        </h2>
+        <p className="text-xs sm:text-sm text-gray-400 mt-1">
+          Connecting live to Firestore catalog
+        </p>
+      </div>
+    );
+  }
+
+  if (tvShows.length === 0) {
+    return (
+      <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-24 text-center">
+        <div className="p-8 sm:p-12 rounded-3xl bg-[#0e0e14] border border-white/10 shadow-2xl space-y-4">
+          <div className="w-16 h-16 mx-auto rounded-2xl bg-red-600/15 border border-red-500/30 flex items-center justify-center text-red-500">
+            <Tv className="w-8 h-8" />
+          </div>
+          <h2 className="text-2xl sm:text-3xl font-extrabold text-white font-['Outfit'] tracking-tight">
+            No TV shows yet, Admin will add soon
+          </h2>
+          <p className="text-xs sm:text-sm text-gray-400 max-w-md mx-auto leading-relaxed">
+            New series and episodes uploaded by the Admin will appear here live.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   // Featured show for Hero Banner
   const featuredShow = tvShows.find((s) => s.isFeatured) || tvShows[0];
@@ -122,12 +156,12 @@ export const TVShowsSection: React.FC = () => {
       </div>
 
       {/* When a specific Genre is active */}
-      {selectedGenre !== 'All' ? (
+      {selectedGenre !== 'All' || filterVJOnly ? (
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex items-center justify-between mb-5">
             <div>
               <h2 className="text-xl sm:text-2xl font-extrabold text-white font-['Outfit']">
-                {selectedGenre} Series
+                {selectedGenre === 'All' ? 'VJ Audio Series' : `${selectedGenre} Series`}
               </h2>
               <p className="text-xs text-gray-400 mt-0.5">
                 Browse multi-season TV shows with episode streams
@@ -138,62 +172,70 @@ export const TVShowsSection: React.FC = () => {
             </span>
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4 lg:gap-5">
-            {filteredShows.map((show) => (
-              <TVShowCard key={show.id} show={show} />
-            ))}
-          </div>
+          {filteredShows.length === 0 ? (
+            <p className="text-sm text-gray-400 py-8 text-center">No TV shows match this filter.</p>
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4 lg:gap-5">
+              {filteredShows.map((show) => (
+                <TVShowCard key={show.id} show={show} />
+              ))}
+            </div>
+          )}
         </div>
       ) : (
         /* Categorized sections for TV Shows */
         <div className="space-y-8 py-2">
           {/* Trending TV Series */}
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <h2 className="text-xl sm:text-2xl font-extrabold text-white font-['Outfit']">
-                  🔥 Trending TV Shows in Uganda
-                </h2>
-                <p className="text-xs text-gray-400 mt-0.5">
-                  Binge-worthy drama and action series with full seasons
-                </p>
-              </div>
-              <span className="text-xs font-bold text-red-500 bg-red-950/40 border border-red-800/30 px-2 py-0.5 rounded-full">
-                {trendingShows.length}
-              </span>
-            </div>
-
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4 lg:gap-5">
-              {trendingShows.map((show) => (
-                <TVShowCard key={show.id} show={show} />
-              ))}
-            </div>
-          </div>
-
-          {/* Ugandan Hits & VJ Translated Series */}
-          <div className="bg-[#0c0c12] py-6 border-y border-white/5">
+          {trendingShows.length > 0 && (
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
               <div className="flex items-center justify-between mb-4">
                 <div>
                   <h2 className="text-xl sm:text-2xl font-extrabold text-white font-['Outfit']">
-                    🇺🇬 Ugandan TV Series & VJ Specials
+                    🔥 Trending TV Shows in Uganda
                   </h2>
                   <p className="text-xs text-gray-400 mt-0.5">
-                    Original Kampala productions with iconic VJ Junior and VJ Emmy narration
+                    Binge-worthy drama and action series with full seasons
                   </p>
                 </div>
                 <span className="text-xs font-bold text-red-500 bg-red-950/40 border border-red-800/30 px-2 py-0.5 rounded-full">
-                  {ugandanShows.length}
+                  {trendingShows.length}
                 </span>
               </div>
 
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4 lg:gap-5">
-                {ugandanShows.map((show) => (
+                {trendingShows.map((show) => (
                   <TVShowCard key={show.id} show={show} />
                 ))}
               </div>
             </div>
-          </div>
+          )}
+
+          {/* Ugandan Hits & VJ Translated Series */}
+          {ugandanShows.length > 0 && (
+            <div className="bg-[#0c0c12] py-6 border-y border-white/5">
+              <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <h2 className="text-xl sm:text-2xl font-extrabold text-white font-['Outfit']">
+                      🇺🇬 Ugandan TV Series & VJ Specials
+                    </h2>
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      Original Kampala productions with iconic VJ Junior and VJ Emmy narration
+                    </p>
+                  </div>
+                  <span className="text-xs font-bold text-red-500 bg-red-950/40 border border-red-800/30 px-2 py-0.5 rounded-full">
+                    {ugandanShows.length}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4 lg:gap-5">
+                  {ugandanShows.map((show) => (
+                    <TVShowCard key={show.id} show={show} />
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* All TV Shows Catalogue */}
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">

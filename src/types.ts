@@ -29,6 +29,7 @@ export interface Movie {
   quality: '4K UHD' | '1080p FHD' | '720p HD';
   posterUrl: string;
   backdropUrl: string;
+  description?: string;
   synopsis: string;
   director: string;
   cast: string[];
@@ -43,6 +44,7 @@ export interface Movie {
   rating5?: number; // 5-star scale average rating (1.0 - 5.0)
   ratingsCount?: number; // total ratings submitted
   userRating?: number; // rating submitted by current user (1 - 5)
+  createdAt?: number;
 }
 
 export interface Episode {

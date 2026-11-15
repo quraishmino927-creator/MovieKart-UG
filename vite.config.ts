@@ -20,6 +20,7 @@ export default defineConfig(() => {
           'apple-touch-icon.png',
         ],
         workbox: {
+          maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
           globPatterns: ['**/*.{js,css,html,ico,png,jpg,jpeg,svg,woff,woff2}'],
           navigateFallback: '/index.html',
           runtimeCaching: [
