@@ -185,25 +185,26 @@ export const ProfileView: React.FC = () => {
         </div>
       </div>
 
-      {/* WhatsApp Support Card */}
+      {/* WhatsApp Support / Contact Card */}
       <div className="p-5 sm:p-6 rounded-3xl bg-[#121217] border border-emerald-500/20 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
           <h3 className="text-sm font-bold text-white flex items-center gap-2">
             <MessageCircle className="w-4 h-4 text-[#25D366]" />
-            MovieKart UG WhatsApp Support
+            MovieKart UG WhatsApp Support & Help
           </h3>
           <p className="text-xs text-gray-400 mt-1">
-            Need help with a movie request, playback issue, or Mobile Money? Chat with our support team on WhatsApp.
+            Need help with a movie request, playback issue, or Mobile Money? Chat with us on{' '}
+            <span className="text-[#25D366] font-bold">+256 741 094 332</span>.
           </p>
         </div>
 
         <a
-          href="https://wa.me/256700000000?text=Hello%20MovieKart%20UG%20Support%2C%20I%20need%20assistance%20with%20streaming."
+          href="https://wa.me/256741094332"
           target="_blank"
           rel="noopener noreferrer"
           className="w-full sm:w-auto px-5 py-2.5 bg-[#25D366] hover:bg-[#1ebe5d] text-black rounded-xl text-xs sm:text-sm font-extrabold transition-all shadow-md flex items-center justify-center gap-2 shrink-0 active:scale-95"
         >
-          <span>Chat on WhatsApp</span>
+          <span>Chat +256 741 094 332</span>
           <ExternalLink className="w-3.5 h-3.5" />
         </a>
       </div>

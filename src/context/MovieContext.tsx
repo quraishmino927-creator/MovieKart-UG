@@ -1364,7 +1364,7 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         id: `u_google_${Date.now()}`,
         name,
         email,
-        phone: '+256 700 000000',
+        phone: '',
         avatar,
         authProvider: 'google',
         subscription: 'MovieKart VIP',

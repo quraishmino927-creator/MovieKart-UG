@@ -240,6 +240,30 @@ const MainContent: React.FC = () => {
         {activeTab === 'profile' && (currentUser ? <ProfileView /> : <AuthScreen />)}
       </main>
 
+      {/* Site Footer with WhatsApp Contact & Support */}
+      <footer className="border-t border-white/5 bg-[#0a0a0f] mt-10">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-gray-400">
+          <div className="text-center sm:text-left">
+            <p className="font-bold text-white font-['Outfit']">
+              Movie<span className="text-[#E50914]">Kart</span> UG
+            </p>
+            <p className="text-[11px] text-gray-500 mt-0.5">
+              Watch movies & TV shows in Uganda and around the world · Help & Support:{' '}
+              <span className="text-[#25D366] font-semibold">+256 741 094 332</span>
+            </p>
+          </div>
+
+          <a
+            href="https://wa.me/256741094332"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[#25D366] hover:bg-[#1ebe5d] text-black font-extrabold text-xs shadow-md transition-all active:scale-95"
+          >
+            <span>WhatsApp Support: +256 741 094 332</span>
+          </a>
+        </div>
+      </footer>
+
       {/* Floating Toast Notification */}
       {toastMessage && (
         <div className="fixed top-20 right-4 sm:right-8 z-50 animate-bounce duration-200">
