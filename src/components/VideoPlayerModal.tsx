@@ -2,32 +2,36 @@ import React, { useRef, useState, useEffect } from 'react';
 import { useMovieContext } from '../context/MovieContext';
 import {
   Play,
-  Pause,
   RotateCcw,
-  RotateCw,
-  Volume2,
-  VolumeX,
-  Maximize,
-  Minimize,
   X,
-  Settings,
   Download,
   CheckCircle2,
-  Volume1,
-  PictureInPicture,
   MessageSquareQuote,
-  ShieldCheck,
-  Check,
   Film
 } from 'lucide-react';
 import { VJTrack } from '../types';
+
+function toDriveEmbedUrl(rawUrl: string): string {
+  let trimmed = (rawUrl || '').trim();
+  if (trimmed && !/^https?:\/\//i.test(trimmed)) {
+    trimmed = `https://${trimmed}`;
+  }
+  const fileMatch = trimmed.match(/drive\.google\.com\/file\/(?:u\/\d+\/)?d\/([^/?#]+)/i);
+  if (fileMatch && fileMatch[1]) {
+    return `https://drive.google.com/file/d/${fileMatch[1]}/preview`;
+  }
+  const idMatch = trimmed.match(/[?&]id=([^&#]+)/i);
+  if (idMatch && idMatch[1]) {
+    return `https://drive.google.com/file/d/${idMatch[1]}/preview`;
+  }
+  return trimmed;
+}
 
 export const VideoPlayerModal: React.FC = () => {
   const {
     currentlyPlayingItem,
     selectedVJTrack,
     closePlayer,
-    downloads,
     startDownload,
     getDownloadStatus,
     movies,
@@ -37,23 +41,11 @@ export const VideoPlayerModal: React.FC = () => {
   } = useMovieContext();
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const containerRef = useRef<HTMLDivElement | null>(null);
   const lastSavedTimeRef = useRef<number>(0);
 
-  const [isPlaying, setIsPlaying] = useState<boolean>(true);
-  const [currentTime, setCurrentTime] = useState<number>(0);
-  const [duration, setDuration] = useState<number>(0);
-  const [volume, setVolume] = useState<number>(1);
-  const [isMuted, setIsMuted] = useState<boolean>(false);
-  const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
-  const [playbackSpeed, setPlaybackSpeed] = useState<number>(1);
-  const [showSettings, setShowSettings] = useState<boolean>(false);
   const [showVJCommentary, setShowVJCommentary] = useState<boolean>(true);
   const [currentVJQuote, setCurrentVJQuote] = useState<string>('');
-  const [showControls, setShowControls] = useState<boolean>(true);
   const [hasEnded, setHasEnded] = useState<boolean>(false);
-  const controlsTimeoutRef = useRef<any>(null);
-
   const [activeVJTrack, setActiveVJTrack] = useState<VJTrack | null>(selectedVJTrack);
 
   useEffect(() => {
@@ -62,16 +54,8 @@ export const VideoPlayerModal: React.FC = () => {
 
   useEffect(() => {
     setHasEnded(false);
+    lastSavedTimeRef.current = 0;
   }, [currentlyPlayingItem?.id]);
-
-  if (!currentlyPlayingItem) return null;
-
-  const item = currentlyPlayingItem;
-  const parentMovie = item.movieId
-    ? movies.find((m) => m.id === item.movieId)
-    : movies.find((m) => `${m.id}_trailer` === item.id);
-  const downloadInfo = getDownloadStatus(item.id);
-  const isDownloaded = downloadInfo?.status === 'completed';
 
   // Format time (seconds -> mm:ss or hh:mm:ss)
   const formatTime = (timeInSec: number) => {
@@ -86,82 +70,20 @@ export const VideoPlayerModal: React.FC = () => {
     return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
   };
 
-  // Keyboard controls
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        if (document.fullscreenElement) {
-          document.exitFullscreen().catch(() => {});
-        } else {
-          handleExitPlayer();
-        }
-      } else if (e.key === ' ' || e.code === 'Space') {
-        e.preventDefault();
-        togglePlayPause();
-      } else if (e.key === 'f' || e.key === 'F') {
-        toggleFullscreen();
-      } else if (e.key === 'm' || e.key === 'M') {
-        toggleMute();
-      } else if (e.key === 'ArrowRight') {
-        skipTime(10);
-      } else if (e.key === 'ArrowLeft') {
-        skipTime(-10);
-      }
-    };
+  const item = currentlyPlayingItem;
+  const videoUrl = item?.videoUrl || '';
+  const isGoogleDrive = videoUrl.toLowerCase().includes('drive.google.com');
+  const driveSrc = isGoogleDrive ? toDriveEmbedUrl(videoUrl) : '';
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isPlaying, isMuted, isFullscreen]);
-
-  // Fullscreen change listener
-  useEffect(() => {
-    const handleFullscreenChange = () => {
-      setIsFullscreen(!!document.fullscreenElement);
-    };
-    document.addEventListener('fullscreenchange', handleFullscreenChange);
-    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
-  }, []);
-
-  // Controls auto-hide timer
-  const handleMouseMove = () => {
-    setShowControls(true);
-    if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
-    controlsTimeoutRef.current = setTimeout(() => {
-      if (isPlaying) {
-        setShowControls(false);
-        setShowSettings(false);
-      }
-    }, 3500);
-  };
-
-  // Simulate VJ Commentary periodic speech balloons
-  useEffect(() => {
-    if (!activeVJTrack || !activeVJTrack.commentaryQuotes?.length || !showVJCommentary) {
-      setCurrentVJQuote('');
-      return;
-    }
-
-    const quotes = activeVJTrack.commentaryQuotes;
-    let quoteIndex = 0;
-
-    setCurrentVJQuote(quotes[0]);
-    const hideInitial = setTimeout(() => setCurrentVJQuote(''), 5000);
-
-    const interval = setInterval(() => {
-      quoteIndex = (quoteIndex + 1) % quotes.length;
-      setCurrentVJQuote(quotes[quoteIndex]);
-      setTimeout(() => setCurrentVJQuote(''), 4500);
-    }, 14000);
-
-    return () => {
-      clearTimeout(hideInitial);
-      clearInterval(interval);
-    };
-  }, [activeVJTrack, showVJCommentary]);
+  const parentMovie = item
+    ? item.movieId
+      ? movies.find((m) => m.id === item.movieId)
+      : movies.find((m) => `${m.id}_trailer` === item.id)
+    : undefined;
 
   const saveProgress = (time: number, totalDuration?: number) => {
     if (!item || item.isTrailer || time < 5) return;
-    const dur = totalDuration || duration || videoRef.current?.duration || 1;
+    const dur = totalDuration || videoRef.current?.duration || 1;
     if (dur <= 0) return;
 
     if (item.episodeNumber) {
@@ -204,29 +126,62 @@ export const VideoPlayerModal: React.FC = () => {
   };
 
   const handleExitPlayer = () => {
-    if (videoRef.current) {
+    if (videoRef.current && !isGoogleDrive) {
       saveProgress(videoRef.current.currentTime, videoRef.current.duration);
     }
     closePlayer();
   };
 
-  const togglePlayPause = () => {
-    if (!videoRef.current) return;
-    if (videoRef.current.paused) {
-      videoRef.current.play().then(() => setIsPlaying(true)).catch(() => {});
-    } else {
-      saveProgress(videoRef.current.currentTime, videoRef.current.duration);
-      videoRef.current.pause();
-      setIsPlaying(false);
+  // Keyboard shortcut: Escape to close player
+  useEffect(() => {
+    if (!currentlyPlayingItem) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (document.fullscreenElement) {
+          document.exitFullscreen().catch(() => {});
+        } else {
+          handleExitPlayer();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [currentlyPlayingItem?.id, isGoogleDrive]);
+
+  // Simulate VJ Commentary periodic speech balloons
+  useEffect(() => {
+    if (!currentlyPlayingItem || !activeVJTrack || !activeVJTrack.commentaryQuotes?.length || !showVJCommentary) {
+      setCurrentVJQuote('');
+      return;
     }
-  };
+
+    const quotes = activeVJTrack.commentaryQuotes;
+    let quoteIndex = 0;
+
+    setCurrentVJQuote(quotes[0]);
+    const hideInitial = setTimeout(() => setCurrentVJQuote(''), 5000);
+
+    const interval = setInterval(() => {
+      quoteIndex = (quoteIndex + 1) % quotes.length;
+      setCurrentVJQuote(quotes[quoteIndex]);
+      setTimeout(() => setCurrentVJQuote(''), 4500);
+    }, 14000);
+
+    return () => {
+      clearTimeout(hideInitial);
+      clearInterval(interval);
+    };
+  }, [currentlyPlayingItem?.id, activeVJTrack, showVJCommentary]);
+
+  if (!item) return null;
+
+  const downloadInfo = getDownloadStatus(item.id);
+  const isDownloaded = downloadInfo?.status === 'completed';
 
   const handleTimeUpdate = () => {
     if (videoRef.current) {
       const cur = videoRef.current.currentTime;
-      setCurrentTime(cur);
-
-      // Auto-save progress every 4 seconds of playback
       if (Math.abs(cur - lastSavedTimeRef.current) >= 4) {
         lastSavedTimeRef.current = cur;
         saveProgress(cur, videoRef.current.duration);
@@ -237,114 +192,187 @@ export const VideoPlayerModal: React.FC = () => {
   const handleLoadedMetadata = () => {
     if (videoRef.current) {
       const dur = videoRef.current.duration;
-      setDuration(dur);
       if (item.startTime && item.startTime > 0 && item.startTime < dur) {
         videoRef.current.currentTime = item.startTime;
-        setCurrentTime(item.startTime);
         lastSavedTimeRef.current = item.startTime;
       }
-      videoRef.current.play().then(() => setIsPlaying(true)).catch(() => {});
-    }
-  };
-
-  const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const targetTime = parseFloat(e.target.value);
-    setCurrentTime(targetTime);
-    if (videoRef.current) {
-      videoRef.current.currentTime = targetTime;
-    }
-  };
-
-  const skipTime = (seconds: number) => {
-    if (videoRef.current) {
-      videoRef.current.currentTime = Math.max(
-        0,
-        Math.min(videoRef.current.duration, videoRef.current.currentTime + seconds)
-      );
-    }
-  };
-
-  const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = parseFloat(e.target.value);
-    setVolume(val);
-    setIsMuted(val === 0);
-    if (videoRef.current) {
-      videoRef.current.volume = val;
-      videoRef.current.muted = val === 0;
-    }
-  };
-
-  const toggleMute = () => {
-    if (!videoRef.current) return;
-    const newMuted = !isMuted;
-    setIsMuted(newMuted);
-    videoRef.current.muted = newMuted;
-    if (!newMuted && volume === 0) {
-      setVolume(0.5);
-      videoRef.current.volume = 0.5;
-    }
-  };
-
-  const handleSpeedChange = (speed: number) => {
-    setPlaybackSpeed(speed);
-    if (videoRef.current) {
-      videoRef.current.playbackRate = speed;
-    }
-    setShowSettings(false);
-    showToast(`Speed: ${speed}x`);
-  };
-
-  const toggleFullscreen = () => {
-    if (!containerRef.current) return;
-    if (!document.fullscreenElement) {
-      containerRef.current.requestFullscreen().then(() => setIsFullscreen(true)).catch(() => {});
-    } else {
-      document.exitFullscreen().then(() => setIsFullscreen(false)).catch(() => {});
-    }
-  };
-
-  const togglePiP = async () => {
-    if (!videoRef.current) return;
-    try {
-      if (document.pictureInPictureElement) {
-        await document.exitPictureInPicture();
-      } else {
-        await videoRef.current.requestPictureInPicture();
-      }
-    } catch {
-      showToast('Picture-in-Picture not supported in this browser mode');
     }
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black flex items-center justify-center select-none overflow-hidden">
-      <div
-        ref={containerRef}
-        onMouseMove={handleMouseMove}
-        onMouseLeave={() => {
-          if (isPlaying) setShowControls(false);
-        }}
-        className="relative w-full h-full bg-black flex items-center justify-center"
-      >
-        {/* Main Video Element */}
-        <video
-          ref={videoRef}
-          src={item.videoUrl}
-          poster={item.backdropUrl || item.posterUrl}
-          onTimeUpdate={handleTimeUpdate}
-          onLoadedMetadata={handleLoadedMetadata}
-          onClick={togglePlayPause}
-          onEnded={() => {
-            setIsPlaying(false);
-            setHasEnded(true);
-          }}
-          playsInline
-          className="w-full h-full object-contain cursor-pointer"
-        />
+    <div className="fixed inset-0 z-50 bg-black flex flex-col overflow-hidden">
+      {/* Top Bar (Title, Audio Track Switcher & Close) */}
+      <div className="w-full px-4 sm:px-6 py-3 bg-black/95 border-b border-white/10 flex items-center justify-between gap-3 shrink-0 z-30">
+        <div className="flex items-center gap-3 min-w-0">
+          <button
+            onClick={handleExitPlayer}
+            aria-label="Exit player"
+            className="p-2 rounded-full bg-white/10 hover:bg-red-600 text-white transition-colors cursor-pointer shrink-0"
+          >
+            <X className="w-5 h-5" />
+          </button>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm sm:text-base font-bold text-white font-['Outfit'] truncate">
+                {item.title}
+              </h2>
+              {item.isTrailer && (
+                <span className="bg-red-600 text-white text-[10px] font-black uppercase px-2 py-0.5 rounded tracking-wider shrink-0">
+                  Teaser
+                </span>
+              )}
+            </div>
+            {item.subTitle && (
+              <p className="text-xs text-red-400 font-semibold truncate">{item.subTitle}</p>
+            )}
+            <p className="text-xs text-gray-400 flex items-center gap-2 truncate">
+              {item.year && <span>{item.year}</span>}
+              {item.quality && (
+                <>
+                  <span>·</span>
+                  <span>{item.quality}</span>
+                </>
+              )}
+              {activeVJTrack && (
+                <>
+                  <span>·</span>
+                  <span className="text-red-400 font-semibold">{activeVJTrack.name}</span>
+                </>
+              )}
+            </p>
+          </div>
+        </div>
 
-        {/* Teaser Trailer Completion Screen */}
-        {hasEnded && item.isTrailer && (
-          <div className="absolute inset-0 z-35 flex flex-col items-center justify-center bg-black/90 backdrop-blur-md p-6 text-center animate-fade-in">
+        <div className="flex items-center gap-2 shrink-0">
+          {item.isTrailer && parentMovie && (
+            <button
+              onClick={() => {
+                setHasEnded(false);
+                playMovie(parentMovie);
+              }}
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold text-xs shadow-lg shadow-red-600/30 transition-all cursor-pointer"
+              title="Switch to full movie"
+            >
+              <Play className="w-3.5 h-3.5 fill-white" />
+              <span className="hidden sm:inline">Watch</span>
+              <span>Full Movie</span>
+            </button>
+          )}
+
+          {item.vjTracks && item.vjTracks.length > 1 && (
+            <select
+              value={activeVJTrack?.id || ''}
+              onChange={(e) => {
+                const tr = item.vjTracks?.find((t) => t.id === e.target.value) || null;
+                setActiveVJTrack(tr);
+                showToast(`Switched audio to ${tr?.name || 'Default'}`);
+              }}
+              className="bg-[#181822] text-xs font-semibold text-red-400 border border-white/20 rounded-lg px-2 py-1.5 focus:outline-none cursor-pointer hidden sm:block"
+            >
+              {item.vjTracks.map((tr) => (
+                <option key={tr.id} value={tr.id}>
+                  {tr.name} ({tr.language})
+                </option>
+              ))}
+            </select>
+          )}
+
+          {activeVJTrack && (
+            <button
+              onClick={() => {
+                setShowVJCommentary(!showVJCommentary);
+                showToast(showVJCommentary ? 'VJ Subtitles Hidden' : 'VJ Commentary Enabled');
+              }}
+              className={`p-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 border transition-colors cursor-pointer ${
+                showVJCommentary
+                  ? 'bg-red-600/30 text-red-400 border-red-500/50'
+                  : 'bg-white/10 text-gray-400 border-white/10'
+              }`}
+              title="Toggle VJ Audio/Commentary subtitles"
+            >
+              <MessageSquareQuote className="w-4 h-4 text-red-400" />
+              <span className="hidden sm:inline">VJ Commentary</span>
+            </button>
+          )}
+
+          {!isDownloaded && !isGoogleDrive && (
+            <button
+              onClick={() =>
+                startDownload({
+                  id: item.id,
+                  title: item.title,
+                  genre: 'Stream',
+                  posterUrl: item.posterUrl,
+                  videoUrl: item.videoUrl,
+                  fileSizeMb: item.fileSizeMb
+                })
+              }
+              className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-white border border-white/10 text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer"
+              title="Download for offline viewing"
+            >
+              <Download className="w-4 h-4" />
+              <span className="hidden sm:inline">Download</span>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Main Watch Player Area (Black Background) */}
+      <div className="relative flex-1 w-full bg-black flex items-center justify-center overflow-hidden p-0 sm:p-4">
+        {isGoogleDrive ? (
+          <iframe
+            src={driveSrc}
+            width="100%"
+            height="500px"
+            style={{ border: '0', backgroundColor: '#000000' }}
+            allow="autoplay; fullscreen; encrypted-media"
+            allowFullScreen
+            title={item.title}
+            className="w-full max-w-6xl bg-black"
+          />
+        ) : (
+          <video
+            ref={videoRef}
+            controls
+            autoPlay
+            playsInline
+            src={videoUrl}
+            poster={item.backdropUrl || item.posterUrl}
+            onTimeUpdate={handleTimeUpdate}
+            onLoadedMetadata={handleLoadedMetadata}
+            onEnded={() => setHasEnded(true)}
+            className="w-full h-full max-h-full bg-black object-contain"
+          />
+        )}
+
+        {/* Offline Badge Notification */}
+        {isDownloaded && !item.isTrailer && !isGoogleDrive && (
+          <div className="absolute top-4 left-4 z-20 bg-emerald-600/90 text-white text-xs font-bold px-3 py-1.5 rounded-lg flex items-center gap-2 shadow-lg backdrop-blur-sm pointer-events-none">
+            <CheckCircle2 className="w-4 h-4 text-emerald-200" />
+            <span>Streaming from Offline Storage</span>
+          </div>
+        )}
+
+        {/* Ugandan VJ Live Commentary Speech Bubble overlay (non-Drive direct video streams) */}
+        {!isGoogleDrive && activeVJTrack && showVJCommentary && currentVJQuote && (
+          <div className="absolute top-4 right-4 sm:left-6 sm:right-auto z-20 max-w-xs sm:max-w-md pointer-events-none">
+            <div className="bg-red-950/90 border border-red-500/60 text-white rounded-2xl p-3 shadow-2xl backdrop-blur-md">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                <span className="font-extrabold text-xs text-red-400 font-['Outfit']">
+                  {activeVJTrack.name} Live Commentary ({activeVJTrack.language})
+                </span>
+              </div>
+              <p className="text-xs sm:text-sm font-bold text-white tracking-wide">
+                "{currentVJQuote}"
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Teaser Trailer Completion Screen (for standard video files) */}
+        {hasEnded && item.isTrailer && !isGoogleDrive && (
+          <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-black/90 backdrop-blur-md p-6 text-center">
             <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-red-600 to-red-900 border border-red-500/50 text-white flex items-center justify-center mb-4 shadow-xl shadow-red-950/60">
               <Film className="w-8 h-8" />
             </div>
@@ -375,7 +403,7 @@ export const VideoPlayerModal: React.FC = () => {
                   setHasEnded(false);
                   if (videoRef.current) {
                     videoRef.current.currentTime = 0;
-                    videoRef.current.play().then(() => setIsPlaying(true)).catch(() => {});
+                    videoRef.current.play().catch(() => {});
                   }
                 }}
                 className="flex items-center gap-2 px-5 py-3.5 rounded-xl bg-white/10 hover:bg-white/20 text-white font-semibold text-sm border border-white/20 transition-all cursor-pointer"
@@ -392,312 +420,6 @@ export const VideoPlayerModal: React.FC = () => {
             </div>
           </div>
         )}
-
-        {/* Offline Badge Notification */}
-        {isDownloaded && !item.isTrailer && (
-          <div className="absolute top-4 left-4 z-40 bg-emerald-600/90 text-white text-xs font-bold px-3 py-1.5 rounded-lg flex items-center gap-2 shadow-lg backdrop-blur-sm pointer-events-none">
-            <CheckCircle2 className="w-4 h-4 text-emerald-200" />
-            <span>Streaming from Offline Storage</span>
-          </div>
-        )}
-
-        {/* Ugandan VJ Live Commentary Speech Bubble overlay */}
-        {activeVJTrack && showVJCommentary && currentVJQuote && (
-          <div className="absolute top-16 left-6 z-40 max-w-sm sm:max-w-md animate-fade-in pointer-events-none">
-            <div className="bg-red-950/90 border border-red-500/60 text-white rounded-2xl p-3 shadow-2xl backdrop-blur-md">
-              <div className="flex items-center gap-2 mb-1">
-                <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-                <span className="font-extrabold text-xs text-red-400 font-['Outfit']">
-                  {activeVJTrack.name} Live Commentary ({activeVJTrack.language})
-                </span>
-              </div>
-              <p className="text-sm font-bold text-white tracking-wide">
-                "{currentVJQuote}"
-              </p>
-            </div>
-          </div>
-        )}
-
-        {/* Play/Pause Large Center Click Indicator (if paused) */}
-        {!isPlaying && !hasEnded && (
-          <div
-            onClick={togglePlayPause}
-            className="absolute inset-0 flex items-center justify-center bg-black/30 cursor-pointer z-20"
-          >
-            <div className="w-20 h-20 rounded-full bg-red-600/90 hover:bg-red-600 text-white flex items-center justify-center shadow-2xl transition-transform hover:scale-110">
-              <Play className="w-10 h-10 fill-white text-white translate-x-1" />
-            </div>
-          </div>
-        )}
-
-        {/* Top Controls Bar (Title & Close) */}
-        <div
-          className={`absolute top-0 inset-x-0 z-30 p-4 sm:p-6 bg-gradient-to-b from-black/90 via-black/50 to-transparent flex items-center justify-between transition-opacity duration-300 ${
-            showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'
-          }`}
-        >
-          <div className="flex items-center gap-3">
-            <button
-              onClick={handleExitPlayer}
-              aria-label="Exit player"
-              className="p-2 rounded-full bg-white/10 hover:bg-red-600 text-white transition-colors cursor-pointer"
-            >
-              <X className="w-5 h-5" />
-            </button>
-            <div>
-              <div className="flex items-center gap-2">
-                <h2 className="text-sm sm:text-base font-bold text-white font-['Outfit'] drop-shadow">
-                  {item.title}
-                </h2>
-                {item.isTrailer && (
-                  <span className="bg-red-600 text-white text-[10px] font-black uppercase px-2 py-0.5 rounded tracking-wider shadow">
-                    Teaser
-                  </span>
-                )}
-              </div>
-              {item.subTitle && (
-                <p className="text-xs text-red-400 font-semibold drop-shadow">{item.subTitle}</p>
-              )}
-              <p className="text-xs text-gray-300 flex items-center gap-2">
-                {item.year && <span>{item.year}</span>}
-                {item.quality && (
-                  <>
-                    <span>·</span>
-                    <span>{item.quality}</span>
-                  </>
-                )}
-                {activeVJTrack && (
-                  <>
-                    <span>·</span>
-                    <span className="text-red-400 font-semibold">{activeVJTrack.name}</span>
-                  </>
-                )}
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            {/* Quick Full Movie Switch if watching trailer */}
-            {item.isTrailer && parentMovie && (
-              <button
-                onClick={() => {
-                  setHasEnded(false);
-                  playMovie(parentMovie);
-                }}
-                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold text-xs shadow-lg shadow-red-600/30 transition-all hover:scale-105 active:scale-95 cursor-pointer"
-                title="Switch to full movie"
-              >
-                <Play className="w-3.5 h-3.5 fill-white" />
-                <span className="hidden sm:inline">Watch</span>
-                <span>Full Movie</span>
-              </button>
-            )}
-
-            {/* VJ Commentary Toggle */}
-            {activeVJTrack && (
-              <button
-                onClick={() => {
-                  setShowVJCommentary(!showVJCommentary);
-                  showToast(showVJCommentary ? 'VJ Subtitles Hidden' : 'VJ Commentary Enabled');
-                }}
-                className={`p-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 border transition-colors cursor-pointer ${
-                  showVJCommentary
-                    ? 'bg-red-600/30 text-red-400 border-red-500/50'
-                    : 'bg-white/10 text-gray-400 border-white/10'
-                }`}
-                title="Toggle VJ Audio/Commentary subtitles"
-              >
-                <MessageSquareQuote className="w-4 h-4 text-red-400" />
-                <span className="hidden sm:inline">VJ Commentary</span>
-              </button>
-            )}
-
-            {/* Offline download trigger directly inside player */}
-            {!isDownloaded && (
-              <button
-                onClick={() =>
-                  startDownload({
-                    id: item.id,
-                    title: item.title,
-                    genre: 'Stream',
-                    posterUrl: item.posterUrl,
-                    videoUrl: item.videoUrl,
-                    fileSizeMb: item.fileSizeMb
-                  })
-                }
-                className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-white border border-white/10 text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer"
-                title="Download for offline viewing"
-              >
-                <Download className="w-4 h-4" />
-                <span className="hidden sm:inline">Download</span>
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* Bottom Playback Controls Bar */}
-        <div
-          className={`absolute bottom-0 inset-x-0 z-30 p-4 sm:p-6 bg-gradient-to-t from-black/95 via-black/70 to-transparent flex flex-col gap-2 transition-opacity duration-300 ${
-            showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'
-          }`}
-        >
-          {/* Seeker / Scrub Bar */}
-          <div className="relative group/seeker w-full flex items-center">
-            <input
-              type="range"
-              min={0}
-              max={duration || 100}
-              step={0.1}
-              value={currentTime}
-              onChange={handleSeek}
-              aria-label="Seek timeline"
-              className="w-full h-1.5 sm:h-2 bg-white/20 rounded-lg appearance-none cursor-pointer accent-red-600 focus:outline-none hover:h-2.5 transition-all"
-            />
-          </div>
-
-          {/* Controls Row */}
-          <div className="flex items-center justify-between gap-2 sm:gap-4 pt-1">
-            {/* Left Controls */}
-            <div className="flex items-center gap-2 sm:gap-4">
-              <button
-                onClick={togglePlayPause}
-                aria-label={isPlaying ? 'Pause' : 'Play'}
-                className="p-2 sm:p-2.5 rounded-full bg-red-600 hover:bg-red-700 text-white transition-transform active:scale-90 cursor-pointer"
-              >
-                {isPlaying ? <Pause className="w-5 h-5 fill-white" /> : <Play className="w-5 h-5 fill-white" />}
-              </button>
-
-              <button
-                onClick={() => skipTime(-10)}
-                aria-label="Skip backward 10s"
-                className="p-2 rounded-full hover:bg-white/10 text-gray-200 transition-colors cursor-pointer"
-                title="Skip back 10 seconds"
-              >
-                <RotateCcw className="w-4 h-4" />
-              </button>
-
-              <button
-                onClick={() => skipTime(10)}
-                aria-label="Skip forward 10s"
-                className="p-2 rounded-full hover:bg-white/10 text-gray-200 transition-colors cursor-pointer"
-                title="Skip forward 10 seconds"
-              >
-                <RotateCw className="w-4 h-4" />
-              </button>
-
-              {/* Volume Slider */}
-              <div className="hidden sm:flex items-center gap-2 group/volume">
-                <button
-                  onClick={toggleMute}
-                  aria-label={isMuted ? 'Unmute' : 'Mute'}
-                  className="p-1.5 text-gray-200 hover:text-white cursor-pointer"
-                >
-                  {isMuted || volume === 0 ? (
-                    <VolumeX className="w-5 h-5 text-red-500" />
-                  ) : volume < 0.5 ? (
-                    <Volume1 className="w-5 h-5" />
-                  ) : (
-                    <Volume2 className="w-5 h-5" />
-                  )}
-                </button>
-                <input
-                  type="range"
-                  min={0}
-                  max={1}
-                  step={0.05}
-                  value={isMuted ? 0 : volume}
-                  onChange={handleVolumeChange}
-                  aria-label="Volume slider"
-                  className="w-16 lg:w-24 h-1 bg-white/20 rounded-lg appearance-none cursor-pointer accent-red-600 focus:outline-none"
-                />
-              </div>
-
-              {/* Timestamp */}
-              <div className="text-xs sm:text-sm font-mono text-gray-300">
-                <span>{formatTime(currentTime)}</span>
-                <span className="text-gray-500 mx-1">/</span>
-                <span className="text-gray-400">{formatTime(duration)}</span>
-              </div>
-            </div>
-
-            {/* Right Controls */}
-            <div className="flex items-center gap-1.5 sm:gap-3">
-              {item.vjTracks && item.vjTracks.length > 1 && (
-                <div className="relative">
-                  <select
-                    value={activeVJTrack?.id || ''}
-                    onChange={(e) => {
-                      const tr = item.vjTracks?.find((t) => t.id === e.target.value) || null;
-                      setActiveVJTrack(tr);
-                      showToast(`Switched audio to ${tr?.name || 'Default'}`);
-                    }}
-                    className="bg-[#181822] text-xs font-semibold text-red-400 border border-white/20 rounded-lg px-2 py-1.5 focus:outline-none cursor-pointer"
-                  >
-                    {item.vjTracks.map((tr) => (
-                      <option key={tr.id} value={tr.id}>
-                        {tr.name} ({tr.language})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
-
-              {/* Speed Settings Menu */}
-              <div className="relative">
-                <button
-                  onClick={() => setShowSettings(!showSettings)}
-                  aria-label="Playback Settings"
-                  className="p-2 rounded-lg hover:bg-white/10 text-gray-200 transition-colors flex items-center gap-1 text-xs font-semibold cursor-pointer"
-                >
-                  <Settings className="w-4 h-4" />
-                  <span className="hidden sm:inline">{playbackSpeed}x</span>
-                </button>
-
-                {showSettings && (
-                  <div className="absolute bottom-12 right-0 bg-[#161622] border border-white/10 rounded-xl shadow-2xl p-2 w-44 z-50 text-xs">
-                    <p className="text-[10px] text-gray-400 uppercase font-bold px-2 py-1">
-                      Playback Speed
-                    </p>
-                    {[0.75, 1, 1.25, 1.5, 2].map((s) => (
-                      <button
-                        key={s}
-                        onClick={() => handleSpeedChange(s)}
-                        className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-md text-left transition-colors cursor-pointer ${
-                          playbackSpeed === s
-                            ? 'bg-red-600 text-white font-bold'
-                            : 'text-gray-300 hover:bg-white/5'
-                        }`}
-                      >
-                        <span>{s}x</span>
-                        {playbackSpeed === s && <Check className="w-3.5 h-3.5" />}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Picture in Picture */}
-              <button
-                onClick={togglePiP}
-                aria-label="Picture in Picture"
-                className="hidden sm:flex p-2 rounded-lg hover:bg-white/10 text-gray-200 transition-colors cursor-pointer"
-                title="Picture in Picture"
-              >
-                <PictureInPicture className="w-4 h-4" />
-              </button>
-
-              {/* Fullscreen Button */}
-              <button
-                onClick={toggleFullscreen}
-                aria-label={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
-                className="p-2 sm:p-2.5 rounded-lg bg-white/10 hover:bg-white/20 text-white transition-colors cursor-pointer"
-                title={isFullscreen ? 'Exit Fullscreen (F)' : 'Fullscreen (F)'}
-              >
-                {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
-              </button>
-            </div>
-          </div>
-        </div>
       </div>
     </div>
   );

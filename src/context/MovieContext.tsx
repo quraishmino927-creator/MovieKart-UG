@@ -385,7 +385,16 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             (typeof data.description === 'string' && data.description) ||
             (typeof data.synopsis === 'string' && data.synopsis) ||
             '';
-          const posterUrl = typeof data.posterUrl === 'string' ? data.posterUrl : '';
+          const posterUrl =
+            (typeof data.posterUrl === 'string' && data.posterUrl) ||
+            (typeof data.poster === 'string' && data.poster) ||
+            '';
+          const videoUrl =
+            (typeof data.videoUrl === 'string' && data.videoUrl) ||
+            (typeof data.videoURL === 'string' && data.videoURL) ||
+            (typeof data.video_url === 'string' && data.video_url) ||
+            (typeof data.url === 'string' && data.url) ||
+            '';
 
           return {
             id: docSnap.id,
@@ -406,7 +415,7 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             synopsis: descriptionText,
             director: typeof data.director === 'string' ? data.director : '',
             cast: Array.isArray(data.cast) ? (data.cast as string[]) : [],
-            videoUrl: typeof data.videoUrl === 'string' ? data.videoUrl : '',
+            videoUrl: videoUrl.trim(),
             trailerUrl: typeof data.trailerUrl === 'string' ? data.trailerUrl : undefined,
             fileSizeMb: typeof data.fileSizeMb === 'number' ? data.fileSizeMb : 450,
             isTrending: Boolean(data.isTrending),
