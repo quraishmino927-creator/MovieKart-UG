@@ -1,6 +1,6 @@
 import React from 'react';
 import { useMovieContext } from '../context/MovieContext';
-import { Search, Wifi, WifiOff, Film, Tv, Heart, DownloadCloud, Sparkles } from 'lucide-react';
+import { Search, Wifi, WifiOff, Film, Tv, Heart, DownloadCloud } from 'lucide-react';
 import { PWAInstallButton } from './PWAInstallButton';
 
 export const Header: React.FC = () => {
@@ -159,31 +159,31 @@ export const Header: React.FC = () => {
           {/* In-App PWA Install Button */}
           <PWAInstallButton variant="header" />
 
-          {/* Current User Avatar */}
+          {/* Current User Avatar or Login / Sign Up */}
           {currentUser ? (
             <button
               onClick={() => setActiveTab('profile')}
-              className="flex items-center gap-2 p-1 rounded-xl hover:bg-white/5 transition-colors focus:outline-none cursor-pointer"
-              title={`${currentUser.name} (${currentUser.subscription})`}
+              className="flex items-center gap-2 p-1 rounded-full hover:bg-white/5 transition-colors focus:outline-none cursor-pointer"
+              title={`${currentUser.name} (@${currentUser.username || 'moviefan'})`}
             >
               <img
-                src={currentUser.avatar}
+                src={currentUser.avatar || '/pwa-192x192.png'}
                 alt={currentUser.name}
-                className="w-8 h-8 rounded-lg object-cover ring-2 ring-red-600/50"
+                className="w-8 h-8 rounded-full object-cover ring-2 ring-[#25D366]/70 bg-black"
               />
-              <div className="hidden xl:block text-left text-xs leading-tight">
+              <div className="hidden xl:block text-left text-xs leading-tight pr-1">
                 <p className="font-semibold text-white truncate max-w-[90px]">{currentUser.name}</p>
-                <p className="text-[10px] text-red-400 font-medium flex items-center gap-0.5">
-                  <Sparkles className="w-2.5 h-2.5" /> VIP
+                <p className="text-[10px] text-[#25D366] font-medium truncate max-w-[90px]">
+                  @{currentUser.username || 'moviefan'}
                 </p>
               </div>
             </button>
           ) : (
             <button
               onClick={() => setActiveTab('profile')}
-              className="px-3 py-1.5 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-bold transition-all shadow-md shadow-red-600/30"
+              className="px-3 py-1.5 rounded-xl bg-[#25D366] hover:bg-[#1ebe5d] text-black text-xs font-extrabold transition-all shadow-md shadow-[#25D366]/20 cursor-pointer"
             >
-              Sign In
+              Login / Sign Up
             </button>
           )}
         </div>

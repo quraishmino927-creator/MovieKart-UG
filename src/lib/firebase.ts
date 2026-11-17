@@ -1,4 +1,4 @@
-import { initializeApp } from 'firebase/app';
+import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
 import { getStorage, ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
@@ -13,11 +13,20 @@ const firebaseConfig = {
   measurementId: "G-XDK1TXKEXG"
 };
 
-const app = initializeApp(firebaseConfig);
+const app = getApps().some((a) => a.name === '[DEFAULT]') ? getApp() : initializeApp(firebaseConfig);
+const adminApp = getApps().some((a) => a.name === 'admin')
+  ? getApp('admin')
+  : initializeApp(firebaseConfig, 'admin');
 
+// Viewer Firebase instances
 export const auth = getAuth(app);
 export const db = getFirestore(app);
 export const storage = getStorage(app);
+
+// Isolated Admin Firebase instances
+export const adminAuth = getAuth(adminApp);
+export const adminDb = getFirestore(adminApp);
+export const adminStorage = getStorage(adminApp);
 
 export enum OperationType {
   CREATE = 'create',
@@ -53,8 +62,8 @@ export function buildFirestoreErrorInfo(
   return {
     error: error instanceof Error ? error.message : String(error),
     authInfo: {
-      userId: auth.currentUser?.uid ?? null,
-      email: auth.currentUser?.email ?? null,
+      userId: adminAuth.currentUser?.uid ?? auth.currentUser?.uid ?? null,
+      email: adminAuth.currentUser?.email ?? auth.currentUser?.email ?? null,
       emailVerified: auth.currentUser?.emailVerified ?? null,
       isAnonymous: auth.currentUser?.isAnonymous ?? null,
       tenantId: auth.currentUser?.tenantId ?? null,
@@ -91,12 +100,14 @@ export async function testFirestoreConnection(): Promise<void> {
 
 export function uploadFileToStorage(
   file: File,
-  folder: 'posters' | 'videos',
-  onProgress?: (progressPercent: number, transferredMb: number, totalMb: number) => void
+  folder: 'posters' | 'videos' | 'avatars',
+  onProgress?: (progressPercent: number, transferredMb: number, totalMb: number) => void,
+  useAdminStorage: boolean = true
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-    const storageRef = ref(storage, `${folder}/${Date.now()}_${safeName}`);
+    const targetStorage = useAdminStorage ? adminStorage : storage;
+    const storageRef = ref(targetStorage, `${folder}/${Date.now()}_${safeName}`);
     const uploadTask = uploadBytesResumable(storageRef, file);
 
     uploadTask.on(

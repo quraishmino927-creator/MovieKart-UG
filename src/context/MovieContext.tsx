@@ -5,19 +5,27 @@ import {
   addDoc,
   updateDoc,
   deleteDoc,
+  getDoc,
+  setDoc,
   doc,
   serverTimestamp,
   Timestamp
 } from 'firebase/firestore';
 import {
   User,
+  GoogleAuthProvider,
+  signInWithPopup,
+  createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
+  updateProfile,
   signOut,
   onAuthStateChanged
 } from 'firebase/auth';
 import {
   db,
   auth,
+  adminDb,
+  adminAuth,
   OperationType,
   buildFirestoreErrorInfo,
   testFirestoreConnection
@@ -33,7 +41,8 @@ import {
   VJTrack,
   ContentMode,
   PlayableItem,
-  ContinueWatchingItem
+  ContinueWatchingItem,
+  WatchHistoryItem
 } from '../types';
 
 interface MovieContextType {
@@ -50,6 +59,7 @@ interface MovieContextType {
   watchlist: string[];
   downloads: DownloadItem[];
   continueWatchingList: ContinueWatchingItem[];
+  watchHistory: WatchHistoryItem[];
   offlineMode: boolean;
   activeTab: ActiveTab;
   selectedGenre: Genre;
@@ -90,7 +100,7 @@ interface MovieContextType {
   clearAllDownloads: () => void;
   getDownloadStatus: (id: string) => DownloadItem | undefined;
 
-  // Continue Watching Actions
+  // Continue Watching & Watch History Actions
   updateWatchProgress: (params: {
     id: string;
     itemId: string;
@@ -112,6 +122,8 @@ interface MovieContextType {
   removeFromContinueWatching: (id: string) => void;
   clearContinueWatching: () => void;
   resumeContinueWatching: (item: ContinueWatchingItem) => void;
+  removeFromWatchHistory: (itemId: string) => void;
+  clearWatchHistory: () => void;
 
   // Playback
   playMovie: (movie: Movie, vjTrackId?: string) => void;
@@ -129,18 +141,26 @@ interface MovieContextType {
   rateMovie: (movieId: string, rating: number) => Promise<void>;
   getUserRating: (movieId: string) => number | undefined;
 
-  // Viewer Session Actions
-  signUpWithGoogle: (customData?: { name?: string; email?: string; avatar?: string }) => void;
-  signUpWithPhone: (phoneNumber: string, name: string, momoProvider?: 'MTN Mobile Money' | 'Airtel Money') => void;
+  // Viewer Session & Profile Actions
+  signUpWithGoogle: () => Promise<{ success: boolean; error?: string }>;
+  signUpWithPhone: (
+    phoneNumber: string,
+    name: string,
+    momoProvider?: 'MTN Mobile Money' | 'Airtel Money'
+  ) => Promise<{ success: boolean; error?: string }>;
   signUpWithEmail: (
     email: string,
     password: string,
     name: string,
     momoProvider?: 'MTN Mobile Money' | 'Airtel Money'
-  ) => { success: boolean; error?: string };
-  signInWithEmail: (email: string, password: string) => { success: boolean; error?: string };
-  continueAsGuest: () => void;
-  logoutUser: () => void;
+  ) => Promise<{ success: boolean; error?: string }>;
+  signInWithEmail: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  updateUserProfile: (updates: {
+    name: string;
+    username: string;
+    avatar: string;
+  }) => Promise<{ success: boolean; error?: string }>;
+  logoutUser: () => Promise<void>;
   switchUserAccount: (user: UserAccount) => void;
 
   // Preferences
@@ -180,6 +200,7 @@ const STORAGE_KEYS = {
   OFFLINE: 'moviekart_ug_offline_mode',
   USER_RATINGS: 'moviekart_ug_user_ratings',
   CONTINUE_WATCHING: 'moviekart_ug_continue_watching',
+  WATCH_HISTORY: 'moviekart_ug_watch_history',
   CURRENT_USER_ID: 'moviekart_ug_current_user_id',
   USER_PASSWORDS: 'moviekart_ug_user_passwords',
 };
@@ -292,6 +313,20 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }
   });
 
+  const [watchHistory, setWatchHistory] = useState<WatchHistoryItem[]>(() => {
+    try {
+      const savedUserId = localStorage.getItem(STORAGE_KEYS.CURRENT_USER_ID);
+      if (savedUserId) {
+        const userSaved = localStorage.getItem(`moviekart_ug_user_${savedUserId}_watch_history`);
+        if (userSaved) return JSON.parse(userSaved);
+      }
+      const saved = localStorage.getItem(STORAGE_KEYS.WATCH_HISTORY);
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
   const [offlineMode, setOfflineMode] = useState<boolean>(() => {
     try {
       return localStorage.getItem(STORAGE_KEYS.OFFLINE) === 'true';
@@ -356,16 +391,61 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }, 3200);
   };
 
-  // 1. Validate Firestore connection & listen to Firebase Admin Auth state
+  // 1. Validate Firestore connection & listen to isolated Firebase Admin Auth + Viewer Auth state
   useEffect(() => {
     testFirestoreConnection();
 
-    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+    const unsubscribeAdminAuth = onAuthStateChanged(adminAuth, (user) => {
       setAdminUser(user);
       setAdminAuthLoading(false);
     });
 
-    return () => unsubscribeAuth();
+    const unsubscribeViewerAuth = onAuthStateChanged(auth, async (fbUser) => {
+      if (!fbUser) return;
+      await hydrateViewerFromFirebase(fbUser);
+    });
+
+    return () => {
+      unsubscribeAdminAuth();
+      unsubscribeViewerAuth();
+    };
+  }, []);
+
+  // Also refresh local session (e.g. phone sign-in) from Firestore on initial load
+  useEffect(() => {
+    const savedId = currentUser?.id;
+    if (!savedId) return;
+    getDoc(doc(db, 'users', savedId))
+      .then((snap) => {
+        if (!snap.exists()) return;
+        const data = snap.data() as Record<string, unknown>;
+        setCurrentUser((prev) => {
+          if (!prev || prev.id !== savedId) return prev;
+          const merged: UserAccount = {
+            ...prev,
+            name: typeof data.name === 'string' && data.name ? data.name : prev.name,
+            username: typeof data.username === 'string' ? data.username : prev.username,
+            avatar: typeof data.avatar === 'string' && data.avatar ? data.avatar : prev.avatar,
+            joinedDate:
+              typeof data.joinedDate === 'string' && data.joinedDate ? data.joinedDate : prev.joinedDate,
+            moviesWatchedCount:
+              typeof data.moviesWatchedCount === 'number'
+                ? data.moviesWatchedCount
+                : prev.moviesWatchedCount,
+          };
+          try {
+            localStorage.setItem(`moviekart_ug_user_${savedId}_profile`, JSON.stringify(merged));
+          } catch {}
+          return merged;
+        });
+        if (Array.isArray(data.watchlist)) {
+          setWatchlist(data.watchlist as string[]);
+        }
+        if (Array.isArray(data.watchHistory)) {
+          setWatchHistory(data.watchHistory as WatchHistoryItem[]);
+        }
+      })
+      .catch(() => {});
   }, []);
 
   // 2. Real-time Firestore listener for "movies" collection
@@ -540,12 +620,23 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     } catch {}
   }, [continueWatchingList]);
 
-  // Per-user isolated storage synchronization
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEYS.WATCH_HISTORY, JSON.stringify(watchHistory));
+    } catch {}
+  }, [watchHistory]);
+
+  // Per-user isolated storage + Firestore synchronization
   useEffect(() => {
     if (currentUser) {
       try {
         localStorage.setItem(`moviekart_ug_user_${currentUser.id}_watchlist`, JSON.stringify(watchlist));
       } catch {}
+      setDoc(
+        doc(db, 'users', currentUser.id),
+        { watchlist, updatedAt: serverTimestamp() },
+        { merge: true }
+      ).catch(() => {});
     }
   }, [watchlist, currentUser?.id]);
 
@@ -567,6 +658,26 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       } catch {}
     }
   }, [continueWatchingList, currentUser?.id]);
+
+  useEffect(() => {
+    if (currentUser) {
+      try {
+        localStorage.setItem(
+          `moviekart_ug_user_${currentUser.id}_watch_history`,
+          JSON.stringify(watchHistory)
+        );
+      } catch {}
+      setDoc(
+        doc(db, 'users', currentUser.id),
+        {
+          watchHistory: watchHistory.slice(0, 50),
+          moviesWatchedCount: watchHistory.length,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      ).catch(() => {});
+    }
+  }, [watchHistory, currentUser?.id]);
 
   useEffect(() => {
     if (currentUser) {
@@ -706,6 +817,44 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     return downloads.find((d) => d.movieId === id);
   };
 
+  const recordWatchHistory = (entry: Omit<WatchHistoryItem, 'watchedAt'>) => {
+    const newEntry: WatchHistoryItem = {
+      ...entry,
+      watchedAt: Date.now(),
+    };
+    setWatchHistory((prev) => {
+      const filtered = prev.filter((h) => h.itemId !== entry.itemId);
+      const next = [newEntry, ...filtered].slice(0, 50);
+      if (currentUser) {
+        setCurrentUser((u) =>
+          u ? { ...u, moviesWatchedCount: next.length } : u
+        );
+      }
+      return next;
+    });
+  };
+
+  const removeFromWatchHistory = (itemId: string) => {
+    setWatchHistory((prev) => {
+      const next = prev.filter((h) => h.itemId !== itemId);
+      if (currentUser) {
+        setCurrentUser((u) =>
+          u ? { ...u, moviesWatchedCount: next.length } : u
+        );
+      }
+      return next;
+    });
+    showToast('Removed from Watch History');
+  };
+
+  const clearWatchHistory = () => {
+    setWatchHistory([]);
+    if (currentUser) {
+      setCurrentUser((u) => (u ? { ...u, moviesWatchedCount: 0 } : u));
+    }
+    showToast('Watch History cleared');
+  };
+
   const playMovie = (movie: Movie, vjTrackId?: string) => {
     if (offlineMode) {
       const isDownloaded = downloads.some((d) => d.movieId === movie.id && d.status === 'completed');
@@ -714,6 +863,18 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         return;
       }
     }
+
+    recordWatchHistory({
+      id: movie.id,
+      itemId: movie.id,
+      type: 'movie',
+      title: movie.title,
+      posterUrl: movie.posterUrl,
+      videoUrl: movie.videoUrl,
+      genre: movie.genre,
+      duration: movie.duration,
+      year: movie.year,
+    });
 
     const track = vjTrackId
       ? movie.vjTracks?.find((t) => t.id === vjTrackId) || movie.vjTracks?.[0]
@@ -764,6 +925,21 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       }
     }
 
+    recordWatchHistory({
+      id: episode.id,
+      itemId: episode.id,
+      type: 'episode',
+      title: episode.title,
+      showTitle: show.title,
+      seasonNumber,
+      episodeNumber: episode.episodeNumber,
+      posterUrl: episode.thumbnailUrl || show.posterUrl,
+      videoUrl: episode.videoUrl,
+      genre: show.genre,
+      duration: episode.duration,
+      year: show.year,
+    });
+
     const track = vjTrackId
       ? show.vjTracks?.find((t) => t.id === vjTrackId) || show.vjTracks?.[0]
       : show.vjTracks?.find((t) => t.isDefault) || show.vjTracks?.[0] || null;
@@ -795,6 +971,20 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         return;
       }
     }
+
+    recordWatchHistory({
+      id: item.itemId,
+      itemId: item.itemId,
+      type: item.type,
+      title: item.title,
+      showTitle: item.showTitle,
+      seasonNumber: item.seasonNumber,
+      episodeNumber: item.episodeNumber,
+      posterUrl: item.thumbnailUrl,
+      videoUrl: item.videoUrl,
+      genre: item.genre,
+      duration: item.durationString,
+    });
 
     if (item.type === 'movie') {
       const targetMovie = movies.find((m) => m.id === item.itemId);
@@ -1004,13 +1194,13 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     return userRatings[movieId];
   };
 
-  // Firebase Admin Authentication (Email & Password)
+  // Firebase Admin Authentication (Isolated adminAuth instance)
   const loginAdminWithEmail = async (
     email: string,
     password: string
   ): Promise<{ success: boolean; error?: string }> => {
     try {
-      await signInWithEmailAndPassword(auth, email.trim(), password);
+      await signInWithEmailAndPassword(adminAuth, email.trim(), password);
       showToast('Admin signed in with Firebase Auth');
       return { success: true };
     } catch (error: unknown) {
@@ -1035,16 +1225,16 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
   const logoutAdmin = async () => {
     try {
-      await signOut(auth);
+      await signOut(adminAuth);
       showToast('Signed out of Admin');
     } catch (error) {
       console.error('Admin sign out error:', error);
     }
   };
 
-  // Firestore Movie CRUD (Admin only)
+  // Firestore Movie CRUD (Admin only, via adminDb/adminAuth)
   const addMovie = async (movieData: Omit<Movie, 'id'>) => {
-    if (!auth.currentUser) {
+    if (!adminAuth.currentUser) {
       showToast('Admin sign-in required to add movies.');
       throw new Error('Admin authentication required');
     }
@@ -1089,11 +1279,11 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       vjTracks,
       viewsCount: 0,
       createdAt: serverTimestamp(),
-      createdBy: auth.currentUser.uid,
+      createdBy: adminAuth.currentUser.uid,
     };
 
     try {
-      await addDoc(collection(db, 'movies'), payload);
+      await addDoc(collection(adminDb, 'movies'), payload);
       showToast(`Published "${payload.title}" live to MovieKart UG!`);
     } catch (error) {
       const info = buildFirestoreErrorInfo(error, OperationType.CREATE, 'movies');
@@ -1104,7 +1294,7 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
 
   const updateMovie = async (updatedMovie: Movie) => {
-    if (!auth.currentUser) {
+    if (!adminAuth.currentUser) {
       showToast('Admin sign-in required to update movies.');
       throw new Error('Admin authentication required');
     }
@@ -1113,7 +1303,7 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     const numericRating = Number(updatedMovie.rating) || 8.0;
 
     try {
-      await updateDoc(doc(db, 'movies', updatedMovie.id), {
+      await updateDoc(doc(adminDb, 'movies', updatedMovie.id), {
         title: updatedMovie.title.trim(),
         description: descriptionText,
         synopsis: descriptionText,
@@ -1145,13 +1335,13 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
 
   const deleteMovie = async (movieId: string) => {
-    if (!auth.currentUser) {
+    if (!adminAuth.currentUser) {
       showToast('Admin sign-in required to delete movies.');
       return;
     }
 
     try {
-      await deleteDoc(doc(db, 'movies', movieId));
+      await deleteDoc(doc(adminDb, 'movies', movieId));
       showToast('Movie deleted from Firestore');
     } catch (error) {
       const info = buildFirestoreErrorInfo(error, OperationType.DELETE, `movies/${movieId}`);
@@ -1171,7 +1361,7 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     duration?: string;
     synopsis?: string;
   }) => {
-    if (!auth.currentUser) {
+    if (!adminAuth.currentUser) {
       showToast('Admin sign-in required to add TV episodes.');
       throw new Error('Admin authentication required');
     }
@@ -1219,7 +1409,7 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           updatedSeasons.sort((a, b) => a.seasonNumber - b.seasonNumber);
         }
 
-        await updateDoc(doc(db, 'tvshows', existingShow.id), {
+        await updateDoc(doc(adminDb, 'tvshows', existingShow.id), {
           seasons: updatedSeasons
         });
         showToast(`Added Season ${params.seasonNumber} Ep ${params.episodeNumber} to "${existingShow.title}"`);
@@ -1255,9 +1445,9 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             }
           ],
           createdAt: serverTimestamp(),
-          createdBy: auth.currentUser.uid,
+          createdBy: adminAuth.currentUser.uid,
         };
-        await addDoc(collection(db, 'tvshows'), newShowPayload);
+        await addDoc(collection(adminDb, 'tvshows'), newShowPayload);
         showToast(`Created TV Show "${normalizedTitle}" in Firestore`);
       }
     } catch (error) {
@@ -1269,12 +1459,12 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
 
   const deleteTVShow = async (showId: string) => {
-    if (!auth.currentUser) {
+    if (!adminAuth.currentUser) {
       showToast('Admin sign-in required.');
       return;
     }
     try {
-      await deleteDoc(doc(db, 'tvshows', showId));
+      await deleteDoc(doc(adminDb, 'tvshows', showId));
       showToast('TV Show deleted from Firestore');
     } catch (error) {
       const info = buildFirestoreErrorInfo(error, OperationType.DELETE, `tvshows/${showId}`);
@@ -1306,10 +1496,167 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     showToast('User account deleted');
   };
 
+  // Helper: format join date nicely
+  const formatJoinDate = (rawDate?: string) => {
+    if (rawDate && rawDate !== 'Just now') return rawDate;
+    return new Date().toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+    });
+  };
+
+  // Helper: derive default handle from name/email
+  const deriveUsername = (name: string, email: string) => {
+    const base = (name || email.split('@')[0] || 'viewer')
+      .toLowerCase()
+      .replace(/[^a-z0-9_]/g, '_')
+      .replace(/_+/g, '_')
+      .replace(/^_|_$/g, '');
+    return base || 'moviefan';
+  };
+
+  // Hydrate Viewer Session from Firebase Auth user + Firestore users/{uid} + localStorage
+  async function hydrateViewerFromFirebase(fbUser: User, explicitName?: string) {
+    let localProfile: Partial<UserAccount> = {};
+    try {
+      const savedLocal = localStorage.getItem(`moviekart_ug_user_${fbUser.uid}_profile`);
+      if (savedLocal) localProfile = JSON.parse(savedLocal);
+    } catch {}
+
+    let remoteData: Record<string, unknown> | null = null;
+    try {
+      const snap = await getDoc(doc(db, 'users', fbUser.uid));
+      if (snap.exists()) {
+        remoteData = snap.data() as Record<string, unknown>;
+      }
+    } catch {}
+
+    const baseName =
+      (typeof remoteData?.name === 'string' && remoteData.name) ||
+      localProfile.name ||
+      explicitName ||
+      fbUser.displayName ||
+      fbUser.email?.split('@')[0] ||
+      'MovieKart Viewer';
+
+    const baseEmail = fbUser.email || localProfile.email || '';
+    const baseUsername =
+      (typeof remoteData?.username === 'string' && remoteData.username) ||
+      localProfile.username ||
+      deriveUsername(baseName, baseEmail);
+
+    const baseAvatar =
+      (typeof remoteData?.avatar === 'string' && remoteData.avatar) ||
+      localProfile.avatar ||
+      fbUser.photoURL ||
+      '/pwa-192x192.png';
+
+    const joinedDate =
+      (typeof remoteData?.joinedDate === 'string' && remoteData.joinedDate !== 'Just now' && remoteData.joinedDate) ||
+      (localProfile.joinedDate && localProfile.joinedDate !== 'Just now' ? localProfile.joinedDate : '') ||
+      (fbUser.metadata?.creationTime
+        ? new Date(fbUser.metadata.creationTime).toLocaleDateString('en-US', {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric',
+          })
+        : formatJoinDate());
+
+    const remoteWatchlist = Array.isArray(remoteData?.watchlist)
+      ? (remoteData!.watchlist as string[])
+      : undefined;
+    const remoteHistory = Array.isArray(remoteData?.watchHistory)
+      ? (remoteData!.watchHistory as WatchHistoryItem[])
+      : undefined;
+
+    const hydratedUser: UserAccount = {
+      id: fbUser.uid,
+      name: baseName,
+      username: baseUsername,
+      email: baseEmail,
+      phone:
+        (typeof remoteData?.phone === 'string' && remoteData.phone) ||
+        localProfile.phone ||
+        fbUser.phoneNumber ||
+        '',
+      avatar: baseAvatar,
+      authProvider:
+        fbUser.providerData?.some((p) => p.providerId === 'google.com')
+          ? 'google'
+          : 'email',
+      subscription: localProfile.subscription || 'MovieKart VIP',
+      status: 'active',
+      joinedDate,
+      momoProvider: localProfile.momoProvider || 'MTN Mobile Money',
+      storageUsedMb: localProfile.storageUsedMb || 0,
+      downloadsCount: localProfile.downloadsCount || 0,
+      moviesWatchedCount:
+        remoteHistory?.length ??
+        (typeof remoteData?.moviesWatchedCount === 'number'
+          ? remoteData.moviesWatchedCount
+          : localProfile.moviesWatchedCount || 0),
+    };
+
+    setUsers((prev) => {
+      const others = prev.filter((u) => u.id !== hydratedUser.id);
+      return [hydratedUser, ...others];
+    });
+    setCurrentUser(hydratedUser);
+
+    try {
+      localStorage.setItem(STORAGE_KEYS.CURRENT_USER_ID, hydratedUser.id);
+      localStorage.setItem(`moviekart_ug_user_${hydratedUser.id}_profile`, JSON.stringify(hydratedUser));
+
+      if (remoteWatchlist) {
+        setWatchlist(remoteWatchlist);
+      } else {
+        const localWL = localStorage.getItem(`moviekart_ug_user_${hydratedUser.id}_watchlist`);
+        if (localWL) setWatchlist(JSON.parse(localWL));
+      }
+
+      if (remoteHistory) {
+        setWatchHistory(remoteHistory);
+      } else {
+        const localWH = localStorage.getItem(`moviekart_ug_user_${hydratedUser.id}_watch_history`);
+        if (localWH) setWatchHistory(JSON.parse(localWH));
+      }
+
+      const localDL = localStorage.getItem(`moviekart_ug_user_${hydratedUser.id}_downloads`);
+      if (localDL) setDownloads(JSON.parse(localDL));
+
+      const localCW = localStorage.getItem(`moviekart_ug_user_${hydratedUser.id}_continue_watching`);
+      if (localCW) setContinueWatchingList(JSON.parse(localCW));
+    } catch {}
+
+    // Ensure initial user profile record exists in Firestore
+    if (!remoteData) {
+      setDoc(
+        doc(db, 'users', hydratedUser.id),
+        {
+          id: hydratedUser.id,
+          name: hydratedUser.name,
+          username: hydratedUser.username,
+          email: hydratedUser.email,
+          phone: hydratedUser.phone,
+          avatar: hydratedUser.avatar,
+          authProvider: hydratedUser.authProvider,
+          joinedDate: hydratedUser.joinedDate,
+          moviesWatchedCount: hydratedUser.moviesWatchedCount || 0,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      ).catch(() => {});
+    }
+
+    return hydratedUser;
+  }
+
   // Viewer Session & Authentication Helpers (NO fake defaults)
   const activateUserSession = (user: UserAccount) => {
     setCurrentUser(user);
-    setActiveTab('home');
+    setUsers((prev) => [user, ...prev.filter((u) => u.id !== user.id)]);
     try {
       localStorage.setItem(STORAGE_KEYS.CURRENT_USER_ID, user.id);
       localStorage.setItem(`moviekart_ug_user_${user.id}_profile`, JSON.stringify(user));
@@ -1322,6 +1669,9 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
       const userCW = localStorage.getItem(`moviekart_ug_user_${user.id}_continue_watching`);
       setContinueWatchingList(userCW ? JSON.parse(userCW) : []);
+
+      const userWH = localStorage.getItem(`moviekart_ug_user_${user.id}_watch_history`);
+      setWatchHistory(userWH ? JSON.parse(userWH) : []);
     } catch (e) {
       console.warn('Error activating user session', e);
     }
@@ -1329,10 +1679,11 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
   const switchUserAccount = (user: UserAccount) => {
     activateUserSession(user);
+    setActiveTab('profile');
     showToast(`Switched account to ${user.name}`);
   };
 
-  const logoutUser = () => {
+  const logoutUser = async () => {
     if (currentUser) {
       try {
         localStorage.setItem(`moviekart_ug_user_${currentUser.id}_watchlist`, JSON.stringify(watchlist));
@@ -1341,86 +1692,234 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           `moviekart_ug_user_${currentUser.id}_continue_watching`,
           JSON.stringify(continueWatchingList)
         );
+        localStorage.setItem(
+          `moviekart_ug_user_${currentUser.id}_watch_history`,
+          JSON.stringify(watchHistory)
+        );
         localStorage.setItem(`moviekart_ug_user_${currentUser.id}_profile`, JSON.stringify(currentUser));
       } catch {}
     }
 
+    try {
+      if (auth.currentUser) {
+        await signOut(auth);
+      }
+    } catch (err) {
+      console.warn('Viewer signOut warning:', err);
+    }
+
     setCurrentUser(null);
+    setWatchlist([]);
+    setWatchHistory([]);
+    setDownloads([]);
+    setContinueWatchingList([]);
     try {
       localStorage.removeItem(STORAGE_KEYS.CURRENT_USER_ID);
     } catch {}
     setActiveTab('profile');
-    showToast('Signed out of MovieKart UG');
+    showToast('Logged out of MovieKart UG');
   };
 
-  const signUpWithGoogle = (customData?: { name?: string; email?: string; avatar?: string }) => {
-    const email = customData?.email || 'quraishmino927@gmail.com';
-    const name = customData?.name || 'MovieKart Viewer';
-    const avatar = customData?.avatar || '/pwa-192x192.png';
-
-    let existingUser = users.find((u) => u.email.toLowerCase() === email.toLowerCase());
-    if (!existingUser) {
-      const newUser: UserAccount = {
-        id: `u_google_${Date.now()}`,
-        name,
-        email,
-        phone: '',
-        avatar,
-        authProvider: 'google',
-        subscription: 'MovieKart VIP',
-        status: 'active',
-        joinedDate: 'Just now',
-        momoProvider: 'MTN Mobile Money',
-        storageUsedMb: 0,
-        downloadsCount: 0
-      };
-      setUsers((prev) => [newUser, ...prev]);
-      existingUser = newUser;
+  // Real Profile Editor: Saves Name, Username, and Profile Photo to localStorage + Firebase
+  const updateUserProfile = async (updates: {
+    name: string;
+    username: string;
+    avatar: string;
+  }): Promise<{ success: boolean; error?: string }> => {
+    if (!currentUser) {
+      return { success: false, error: 'Please log in first to edit your profile.' };
     }
 
-    activateUserSession(existingUser);
-    showToast(`Signed in with Google as ${existingUser.name}`);
+    const cleanName = updates.name.trim();
+    if (!cleanName) {
+      return { success: false, error: 'Name cannot be empty.' };
+    }
+
+    const cleanUsername = updates.username
+      .trim()
+      .replace(/^@+/, '')
+      .replace(/\s+/g, '_')
+      .toLowerCase();
+
+    const finalAvatar = updates.avatar.trim() || currentUser.avatar || '/pwa-192x192.png';
+
+    const updatedUser: UserAccount = {
+      ...currentUser,
+      name: cleanName,
+      username: cleanUsername || deriveUsername(cleanName, currentUser.email),
+      avatar: finalAvatar,
+    };
+
+    // 1. Update local state & localStorage immediately
+    setCurrentUser(updatedUser);
+    setUsers((prev) => [updatedUser, ...prev.filter((u) => u.id !== updatedUser.id)]);
+    try {
+      localStorage.setItem(STORAGE_KEYS.CURRENT_USER_ID, updatedUser.id);
+      localStorage.setItem(`moviekart_ug_user_${updatedUser.id}_profile`, JSON.stringify(updatedUser));
+    } catch (err) {
+      console.warn('Failed to write profile to localStorage:', err);
+    }
+
+    // 2. Sync Firebase Auth profile if authenticated via Firebase Auth
+    try {
+      if (auth.currentUser && auth.currentUser.uid === updatedUser.id) {
+        const photoUpdate = finalAvatar.startsWith('http') ? finalAvatar : undefined;
+        await updateProfile(auth.currentUser, {
+          displayName: updatedUser.name,
+          ...(photoUpdate ? { photoURL: photoUpdate } : {}),
+        });
+      }
+    } catch (err) {
+      console.warn('Firebase Auth updateProfile skipped:', err);
+    }
+
+    // 3. Persist to Firestore users/{userId}
+    try {
+      await setDoc(
+        doc(db, 'users', updatedUser.id),
+        {
+          id: updatedUser.id,
+          name: updatedUser.name,
+          username: updatedUser.username,
+          email: updatedUser.email,
+          phone: updatedUser.phone,
+          avatar: updatedUser.avatar,
+          joinedDate: updatedUser.joinedDate,
+          moviesWatchedCount: watchHistory.length,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+      showToast('Profile saved to MovieKart UG & Firebase!');
+      return { success: true };
+    } catch (error) {
+      console.warn('Firestore profile sync warning (saved locally):', error);
+      showToast('Profile saved locally! (Enable Firestore users rules to sync cloud)');
+      return { success: true };
+    }
   };
 
-  const signUpWithPhone = (
+  // Real Google Sign-In via Firebase GoogleAuthProvider
+  const signUpWithGoogle = async (): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const provider = new GoogleAuthProvider();
+      provider.setCustomParameters({ prompt: 'select_account' });
+      const result = await signInWithPopup(auth, provider);
+      const user = await hydrateViewerFromFirebase(result.user);
+      setActiveTab('profile');
+      showToast(`Welcome, ${user.name}!`);
+      return { success: true };
+    } catch (error: unknown) {
+      const code = (error as { code?: string })?.code || '';
+      let message = 'Google Sign-In failed. Please try Email & Password.';
+      if (code === 'auth/popup-closed-by-user') {
+        message = 'Google sign-in popup was closed before completing.';
+      } else if (code === 'auth/popup-blocked') {
+        message = 'Popup blocked by browser. Allow popups or use Email & Password.';
+      } else if (code === 'auth/operation-not-allowed') {
+        message = 'Google Sign-In is not enabled in Firebase Auth Console yet. Please use Email & Password.';
+      } else if (code === 'auth/unauthorized-domain') {
+        message = 'This domain is not authorized in Firebase Auth settings yet. Use Email & Password or authorize the domain.';
+      } else if (error instanceof Error && error.message) {
+        message = error.message;
+      }
+      return { success: false, error: message };
+    }
+  };
+
+  // Phone Sign-Up / Sign-In backed by Firestore + localStorage
+  const signUpWithPhone = async (
     phoneNumber: string,
     name: string,
     momoProvider: 'MTN Mobile Money' | 'Airtel Money' = 'MTN Mobile Money'
-  ) => {
+  ): Promise<{ success: boolean; error?: string }> => {
     const cleanDigits = phoneNumber.replace(/\D/g, '');
+    if (cleanDigits.length < 8) {
+      return { success: false, error: 'Please enter a valid Ugandan phone number.' };
+    }
     const formattedPhone = cleanDigits.startsWith('256') ? `+${cleanDigits}` : `+256 ${cleanDigits}`;
-    const displayName = name.trim() || 'Kampala Streamer';
+    const displayName = name.trim() || 'MovieKart Streamer';
+    const docId = `phone_${cleanDigits}`;
 
-    let existingUser = users.find((u) => u.phone.replace(/\D/g, '') === cleanDigits);
+    let existingUser = users.find((u) => u.id === docId || u.phone.replace(/\D/g, '') === cleanDigits);
+
     if (!existingUser) {
-      const newUser: UserAccount = {
-        id: `u_phone_${Date.now()}`,
+      try {
+        const snap = await getDoc(doc(db, 'users', docId));
+        if (snap.exists()) {
+          const data = snap.data() as Record<string, unknown>;
+          existingUser = {
+            id: docId,
+            name: typeof data.name === 'string' ? data.name : displayName,
+            username:
+              typeof data.username === 'string'
+                ? data.username
+                : deriveUsername(displayName, ''),
+            email: typeof data.email === 'string' ? data.email : `${cleanDigits.slice(-6)}@moviekart.ug`,
+            phone: formattedPhone,
+            avatar: typeof data.avatar === 'string' ? data.avatar : '/pwa-192x192.png',
+            authProvider: 'phone',
+            subscription: 'MovieKart VIP',
+            status: 'active',
+            joinedDate:
+              typeof data.joinedDate === 'string' ? data.joinedDate : formatJoinDate(),
+            momoProvider,
+            storageUsedMb: 0,
+            downloadsCount: 0,
+            moviesWatchedCount:
+              typeof data.moviesWatchedCount === 'number' ? data.moviesWatchedCount : 0,
+          };
+          if (Array.isArray(data.watchlist)) {
+            localStorage.setItem(`moviekart_ug_user_${docId}_watchlist`, JSON.stringify(data.watchlist));
+          }
+          if (Array.isArray(data.watchHistory)) {
+            localStorage.setItem(`moviekart_ug_user_${docId}_watch_history`, JSON.stringify(data.watchHistory));
+          }
+        }
+      } catch {}
+    }
+
+    if (!existingUser) {
+      existingUser = {
+        id: docId,
         name: displayName,
+        username: deriveUsername(displayName, ''),
         email: `${cleanDigits.slice(-6)}@moviekart.ug`,
         phone: formattedPhone,
         avatar: '/pwa-192x192.png',
         authProvider: 'phone',
         subscription: 'MovieKart VIP',
         status: 'active',
-        joinedDate: 'Just now',
+        joinedDate: formatJoinDate(),
         momoProvider,
         storageUsedMb: 0,
-        downloadsCount: 0
+        downloadsCount: 0,
+        moviesWatchedCount: 0,
       };
-      setUsers((prev) => [newUser, ...prev]);
-      existingUser = newUser;
+      setDoc(
+        doc(db, 'users', docId),
+        {
+          ...existingUser,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      ).catch(() => {});
     }
 
     activateUserSession(existingUser);
-    showToast(`Signed up with ${momoProvider}! Welcome, ${existingUser.name}`);
+    setActiveTab('profile');
+    showToast(`Signed in with ${momoProvider}! Welcome, ${existingUser.name}`);
+    return { success: true };
   };
 
-  const signUpWithEmail = (
+  // Real Email & Password Sign-Up with Firebase Auth + Firestore
+  const signUpWithEmail = async (
     email: string,
     password: string,
     name: string,
     momoProvider: 'MTN Mobile Money' | 'Airtel Money' = 'MTN Mobile Money'
-  ): { success: boolean; error?: string } => {
+  ): Promise<{ success: boolean; error?: string }> => {
     const cleanEmail = email.trim().toLowerCase();
     if (!cleanEmail || !cleanEmail.includes('@')) {
       return { success: false, error: 'Please enter a valid email address.' };
@@ -1429,41 +1928,42 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       return { success: false, error: 'Password must be at least 6 characters long.' };
     }
 
-    const existingUser = users.find((u) => u.email.toLowerCase() === cleanEmail);
-    if (existingUser) {
-      return { success: false, error: 'An account with this email already exists. Please choose Sign In.' };
-    }
+    const displayName = name.trim() || cleanEmail.split('@')[0];
 
     try {
-      const savedPw = localStorage.getItem(STORAGE_KEYS.USER_PASSWORDS);
-      const pwMap = savedPw ? JSON.parse(savedPw) : {};
-      pwMap[cleanEmail] = password;
-      localStorage.setItem(STORAGE_KEYS.USER_PASSWORDS, JSON.stringify(pwMap));
-    } catch {}
-
-    const displayName = name.trim() || cleanEmail.split('@')[0];
-    const newUser: UserAccount = {
-      id: `u_email_${Date.now()}`,
-      name: displayName,
-      email: cleanEmail,
-      phone: '',
-      avatar: '/pwa-192x192.png',
-      authProvider: 'email',
-      subscription: 'MovieKart VIP',
-      status: 'active',
-      joinedDate: 'Just now',
-      momoProvider,
-      storageUsedMb: 0,
-      downloadsCount: 0
-    };
-
-    setUsers((prev) => [newUser, ...prev]);
-    activateUserSession(newUser);
-    showToast(`Account created for ${newUser.name}!`);
-    return { success: true };
+      const cred = await createUserWithEmailAndPassword(auth, cleanEmail, password);
+      await updateProfile(cred.user, { displayName });
+      const user = await hydrateViewerFromFirebase(cred.user, displayName);
+      const updatedWithMomo = { ...user, momoProvider };
+      setCurrentUser(updatedWithMomo);
+      localStorage.setItem(`moviekart_ug_user_${user.id}_profile`, JSON.stringify(updatedWithMomo));
+      setDoc(doc(db, 'users', user.id), { momoProvider }, { merge: true }).catch(() => {});
+      setActiveTab('profile');
+      showToast(`Account created for ${user.name}!`);
+      return { success: true };
+    } catch (error: unknown) {
+      const code = (error as { code?: string })?.code || '';
+      if (code === 'auth/email-already-in-use') {
+        return { success: false, error: 'An account with this email already exists. Please switch to Sign In.' };
+      }
+      if (code === 'auth/weak-password') {
+        return { success: false, error: 'Password must be at least 6 characters.' };
+      }
+      if (code === 'auth/invalid-email') {
+        return { success: false, error: 'Please enter a valid email address.' };
+      }
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unable to create account.',
+      };
+    }
   };
 
-  const signInWithEmail = (email: string, password: string): { success: boolean; error?: string } => {
+  // Real Email & Password Sign-In with Firebase Auth + Firestore restore
+  const signInWithEmail = async (
+    email: string,
+    password: string
+  ): Promise<{ success: boolean; error?: string }> => {
     const cleanEmail = email.trim().toLowerCase();
     if (!cleanEmail) {
       return { success: false, error: 'Please enter your email address.' };
@@ -1472,32 +1972,29 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       return { success: false, error: 'Please enter your password.' };
     }
 
-    const foundUser = users.find((u) => u.email.toLowerCase() === cleanEmail);
-    if (!foundUser) {
-      return { success: false, error: 'No account found with this email. Please create an account first.' };
+    try {
+      const cred = await signInWithEmailAndPassword(auth, cleanEmail, password);
+      const user = await hydrateViewerFromFirebase(cred.user);
+      setActiveTab('profile');
+      showToast(`Welcome back, ${user.name}!`);
+      return { success: true };
+    } catch (error: unknown) {
+      const code = (error as { code?: string })?.code || '';
+      if (
+        code === 'auth/invalid-credential' ||
+        code === 'auth/wrong-password' ||
+        code === 'auth/user-not-found'
+      ) {
+        return { success: false, error: 'Invalid email or password.' };
+      }
+      if (code === 'auth/too-many-requests') {
+        return { success: false, error: 'Too many failed login attempts. Try again shortly.' };
+      }
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to sign in.',
+      };
     }
-
-    activateUserSession(foundUser);
-    showToast(`Welcome back, ${foundUser.name}!`);
-    return { success: true };
-  };
-
-  const continueAsGuest = () => {
-    const guestUser: UserAccount = users[0] || {
-      id: 'guest_viewer',
-      name: 'Guest Viewer',
-      email: 'guest@moviekart.ug',
-      phone: '',
-      avatar: '/pwa-192x192.png',
-      subscription: 'Free Pass',
-      status: 'active',
-      joinedDate: 'Just now',
-      momoProvider: 'MTN Mobile Money',
-      storageUsedMb: 0,
-      downloadsCount: 0
-    };
-    activateUserSession(guestUser);
-    showToast('Browsing MovieKart UG catalog as Guest');
   };
 
   return (
@@ -1516,6 +2013,7 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         watchlist,
         downloads,
         continueWatchingList,
+        watchHistory,
         offlineMode,
         activeTab,
         selectedGenre,
@@ -1543,6 +2041,8 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         removeFromContinueWatching,
         clearContinueWatching,
         resumeContinueWatching,
+        removeFromWatchHistory,
+        clearWatchHistory,
         playMovie,
         playTrailer,
         playEpisode,
@@ -1559,7 +2059,7 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         signUpWithPhone,
         signUpWithEmail,
         signInWithEmail,
-        continueAsGuest,
+        updateUserProfile,
         logoutUser,
         switchUserAccount,
         loginAdminWithEmail,

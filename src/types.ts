@@ -146,9 +146,26 @@ export interface DownloadItem {
   episodeTitle?: string;
 }
 
+export interface WatchHistoryItem {
+  id: string;
+  itemId: string;
+  type: 'movie' | 'episode';
+  title: string;
+  showTitle?: string;
+  seasonNumber?: number;
+  episodeNumber?: number;
+  posterUrl: string;
+  videoUrl: string;
+  genre?: string;
+  duration?: string;
+  year?: number;
+  watchedAt: number;
+}
+
 export interface UserAccount {
   id: string;
   name: string;
+  username?: string;
   email: string;
   phone: string;
   avatar: string;
@@ -159,6 +176,7 @@ export interface UserAccount {
   momoProvider: 'MTN Mobile Money' | 'Airtel Money';
   storageUsedMb: number;
   downloadsCount: number;
+  moviesWatchedCount?: number;
 }
 
 export type ActiveTab = 'home' | 'search' | 'watchlist' | 'downloads' | 'profile' | 'admin';
