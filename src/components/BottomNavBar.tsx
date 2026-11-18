@@ -1,16 +1,17 @@
 import React from 'react';
 import { useMovieContext } from '../context/MovieContext';
-import { Home, Search, Heart, DownloadCloud, User } from 'lucide-react';
+import { Home, Radio, Search, Heart, DownloadCloud, User } from 'lucide-react';
 import { ActiveTab } from '../types';
 
 export const BottomNavBar: React.FC = () => {
-  const { activeTab, setActiveTab, watchlist, downloads } = useMovieContext();
+  const { activeTab, setActiveTab, setContentMode, watchlist, downloads } = useMovieContext();
 
   const completedDownloadsCount = downloads.filter((d) => d.status === 'completed').length;
   const activeDownloadsCount = downloads.filter((d) => d.status === 'downloading').length;
 
   const navItems: { id: ActiveTab; label: string; icon: React.FC<{ className?: string }>; badge?: number }[] = [
     { id: 'home', label: 'Home', icon: Home },
+    { id: 'livetv', label: 'Live TV', icon: Radio },
     { id: 'search', label: 'Search', icon: Search },
     { id: 'watchlist', label: 'Watchlist', icon: Heart, badge: watchlist.length },
     { id: 'downloads', label: 'Downloads', icon: DownloadCloud, badge: completedDownloadsCount },
@@ -22,7 +23,7 @@ export const BottomNavBar: React.FC = () => {
       aria-label="Bottom Navigation"
       className="fixed bottom-0 inset-x-0 z-40 bg-[#070709]/95 backdrop-blur-lg border-t border-white/5 pb-safe transition-all"
     >
-      <div className="max-w-lg mx-auto px-2 flex items-center justify-around h-16">
+      <div className="max-w-lg mx-auto px-1 flex items-center justify-around h-16">
         {navItems.map((item) => {
           const isActive = activeTab === item.id;
           const Icon = item.icon;
@@ -30,8 +31,13 @@ export const BottomNavBar: React.FC = () => {
           return (
             <button
               key={item.id}
-              onClick={() => setActiveTab(item.id)}
-              className={`relative flex flex-col items-center justify-center w-16 h-full py-1 text-center transition-colors cursor-pointer ${
+              onClick={() => {
+                if (item.id === 'livetv') {
+                  setContentMode('livetv');
+                }
+                setActiveTab(item.id);
+              }}
+              className={`relative flex flex-col items-center justify-center flex-1 min-h-[44px] py-1 text-center transition-colors cursor-pointer ${
                 isActive ? 'text-red-500' : 'text-gray-400 hover:text-gray-200'
               }`}
             >

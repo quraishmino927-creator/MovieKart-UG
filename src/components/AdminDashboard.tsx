@@ -25,9 +25,11 @@ import {
   CheckCircle2,
   Loader2,
   EyeOff,
-  AlertCircle
+  AlertCircle,
+  Radio
 } from 'lucide-react';
-import { Movie, Genre } from '../types';
+import { Movie, Genre, LiveTVChannel } from '../types';
+import { toYouTubeEmbedUrl } from '../lib/liveChannels';
 
 export const AdminDashboard: React.FC = () => {
   const {
@@ -39,6 +41,11 @@ export const AdminDashboard: React.FC = () => {
     deleteMovie,
     addEpisodeToShow,
     deleteTVShow,
+    liveChannels,
+    openLiveChannel,
+    addLiveChannel,
+    updateLiveChannel,
+    deleteLiveChannel,
     openShowDetails,
     addUser,
     updateUser,
@@ -53,7 +60,7 @@ export const AdminDashboard: React.FC = () => {
     showToast
   } = useMovieContext();
 
-  const [activeAdminTab, setActiveAdminTab] = useState<'movies' | 'tvshows' | 'users' | 'analytics'>('movies');
+  const [activeAdminTab, setActiveAdminTab] = useState<'movies' | 'tvshows' | 'livetv' | 'users' | 'analytics'>('movies');
 
   // Firebase Email/Password Admin Login state
   const [adminEmail, setAdminEmail] = useState('');
@@ -66,6 +73,8 @@ export const AdminDashboard: React.FC = () => {
   const [isAddMovieModalOpen, setIsAddMovieModalOpen] = useState(false);
   const [editingMovie, setEditingMovie] = useState<Movie | null>(null);
   const [isAddTVShowModalOpen, setIsAddTVShowModalOpen] = useState(false);
+  const [isLiveTVModalOpen, setIsLiveTVModalOpen] = useState(false);
+  const [editingLiveChannel, setEditingLiveChannel] = useState<LiveTVChannel | null>(null);
   const [isAddUserModalOpen, setIsAddUserModalOpen] = useState(false);
 
   // Firebase Storage Upload states
@@ -129,6 +138,18 @@ export const AdminDashboard: React.FC = () => {
     storageUsedMb: 0,
     downloadsCount: 0
   });
+
+  const emptyLiveForm = {
+    name: '',
+    logoUrl: '',
+    youtubeLiveUrl: '',
+    description: '',
+    watchingNow: 500,
+    isLive: true
+  };
+  const [liveForm, setLiveForm] = useState(emptyLiveForm);
+  const [liveLogoUploading, setLiveLogoUploading] = useState(false);
+  const [savingLiveChannel, setSavingLiveChannel] = useState(false);
 
   const handleAdminLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -505,6 +526,78 @@ export const AdminDashboard: React.FC = () => {
     });
   };
 
+  const handleOpenAddLiveChannel = () => {
+    setEditingLiveChannel(null);
+    setLiveForm(emptyLiveForm);
+    setIsLiveTVModalOpen(true);
+  };
+
+  const handleOpenEditLiveChannel = (channel: LiveTVChannel) => {
+    setEditingLiveChannel(channel);
+    setLiveForm({
+      name: channel.name,
+      logoUrl: channel.logoUrl,
+      youtubeLiveUrl: channel.youtubeLiveUrl,
+      description: channel.description || '',
+      watchingNow: channel.watchingNow || 0,
+      isLive: channel.isLive !== false
+    });
+    setIsLiveTVModalOpen(true);
+  };
+
+  const handleLiveLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setLiveLogoUploading(true);
+    try {
+      const url = await uploadFileToStorage(file, 'posters');
+      setLiveForm((prev) => ({ ...prev, logoUrl: url }));
+      showToast('Channel logo uploaded to Firebase Storage!');
+    } catch (err) {
+      console.error('Channel logo upload failed:', err);
+      showToast('Logo upload failed. You can paste an image URL instead.');
+    } finally {
+      setLiveLogoUploading(false);
+    }
+  };
+
+  const handleSaveLiveChannel = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!liveForm.name.trim() || !liveForm.youtubeLiveUrl.trim()) {
+      showToast('Please enter both Channel Name and YouTube Live URL.');
+      return;
+    }
+
+    setSavingLiveChannel(true);
+    try {
+      if (editingLiveChannel) {
+        await updateLiveChannel({
+          ...editingLiveChannel,
+          name: liveForm.name,
+          logoUrl: liveForm.logoUrl,
+          youtubeLiveUrl: liveForm.youtubeLiveUrl,
+          description: liveForm.description,
+          watchingNow: Number(liveForm.watchingNow) || 0,
+          isLive: liveForm.isLive
+        });
+      } else {
+        await addLiveChannel({
+          name: liveForm.name,
+          logoUrl: liveForm.logoUrl,
+          youtubeLiveUrl: liveForm.youtubeLiveUrl,
+          description: liveForm.description,
+          watchingNow: Number(liveForm.watchingNow) || 120,
+          isLive: liveForm.isLive
+        });
+      }
+      setIsLiveTVModalOpen(false);
+      setEditingLiveChannel(null);
+      setLiveForm(emptyLiveForm);
+    } finally {
+      setSavingLiveChannel(false);
+    }
+  };
+
   const totalViews = movies.reduce((acc, m) => acc + (m.viewsCount || 0), 0);
   const totalSubscribers = users.filter((u) => u.subscription === 'MovieKart VIP').length;
 
@@ -545,6 +638,14 @@ export const AdminDashboard: React.FC = () => {
           >
             <Plus className="w-4 h-4" />
             <span>Add TV Show / Episode</span>
+          </button>
+
+          <button
+            onClick={handleOpenAddLiveChannel}
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-red-950/60 hover:bg-red-900/60 text-red-300 border border-red-500/50 font-bold text-xs sm:text-sm rounded-xl transition-all cursor-pointer"
+          >
+            <Radio className="w-4 h-4" />
+            <span>Add Live TV</span>
           </button>
 
           <button
@@ -629,6 +730,18 @@ export const AdminDashboard: React.FC = () => {
         >
           <Tv className="w-4 h-4" />
           <span>TV Shows ({tvShows.length})</span>
+        </button>
+
+        <button
+          onClick={() => setActiveAdminTab('livetv')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-colors cursor-pointer shrink-0 ${
+            activeAdminTab === 'livetv'
+              ? 'bg-[#E50914] text-white shadow-md'
+              : 'text-gray-400 hover:text-white'
+          }`}
+        >
+          <Radio className="w-4 h-4" />
+          <span>Live TV ({liveChannels.length})</span>
         </button>
 
         <button
@@ -909,7 +1022,125 @@ export const AdminDashboard: React.FC = () => {
         </div>
       )}
 
-      {/* TAB 3: USERS MANAGEMENT */}
+      {/* TAB 3: LIVE TV MANAGEMENT */}
+      {activeAdminTab === 'livetv' && (
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="text-base font-bold text-white">Ugandan Live TV Channels</h3>
+              <p className="text-xs text-gray-400">
+                Manage station names, logos, and YouTube Live URLs / Embed URLs.
+              </p>
+            </div>
+            <button
+              onClick={handleOpenAddLiveChannel}
+              className="flex items-center gap-1.5 px-3.5 py-2 bg-[#E50914] hover:bg-red-700 text-white text-xs font-bold rounded-xl cursor-pointer shadow-md shadow-red-600/20"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Add Live TV Channel</span>
+            </button>
+          </div>
+
+          {liveChannels.length === 0 ? (
+            <div className="p-10 rounded-3xl bg-[#121217] border border-white/5 text-center space-y-2">
+              <Radio className="w-8 h-8 mx-auto text-[#E50914]" />
+              <p className="text-sm font-bold text-white">No Live TV channels added yet</p>
+              <p className="text-xs text-gray-400">Click "Add Live TV Channel" to publish a channel.</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto rounded-2xl bg-[#121217] border border-white/5">
+              <table className="w-full text-left text-xs sm:text-sm text-gray-300">
+                <thead className="bg-[#181822] text-[11px] uppercase font-bold text-gray-400 border-b border-white/5">
+                  <tr>
+                    <th className="py-3 px-4">Channel</th>
+                    <th className="py-3 px-4">Status</th>
+                    <th className="py-3 px-4">Watching Now</th>
+                    <th className="py-3 px-4">YouTube Live URL</th>
+                    <th className="py-3 px-4 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/5">
+                  {liveChannels.map((ch) => (
+                    <tr key={ch.id} className="hover:bg-white/5 transition-colors">
+                      <td className="py-3 px-4 flex items-center gap-3">
+                        <img
+                          src={ch.logoUrl || '/pwa-192x192.png'}
+                          alt={ch.name}
+                          referrerPolicy="no-referrer"
+                          className="w-14 h-10 rounded-lg object-cover shrink-0 bg-black border border-white/10"
+                        />
+                        <div className="min-w-0">
+                          <p className="font-bold text-white truncate">{ch.name}</p>
+                          {ch.description && (
+                            <p className="text-[11px] text-gray-400 truncate max-w-[220px]">
+                              {ch.description}
+                            </p>
+                          )}
+                        </div>
+                      </td>
+
+                      <td className="py-3 px-4">
+                        {ch.isLive !== false ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#E50914] text-white text-[10px] font-black uppercase tracking-wider">
+                            LIVE
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-bold uppercase text-gray-400">Offline</span>
+                        )}
+                      </td>
+
+                      <td className="py-3 px-4 font-mono tabular-nums text-xs text-white">
+                        {(ch.watchingNow || 0).toLocaleString()}
+                      </td>
+
+                      <td className="py-3 px-4">
+                        <p className="text-[11px] font-mono text-gray-400 truncate max-w-[240px]">
+                          {ch.youtubeLiveUrl}
+                        </p>
+                      </td>
+
+                      <td className="py-3 px-4 text-right">
+                        <div className="flex items-center justify-end gap-1.5">
+                          <button
+                            onClick={() => {
+                              setActiveTab('livetv');
+                              openLiveChannel(ch);
+                            }}
+                            className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-gray-300 hover:text-white cursor-pointer"
+                            title="Watch Live Stream"
+                          >
+                            <Play className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => handleOpenEditLiveChannel(ch)}
+                            className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-gray-300 hover:text-white cursor-pointer"
+                            title="Edit Channel"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => {
+                              if (window.confirm(`Remove "${ch.name}" from Live TV?`)) {
+                                deleteLiveChannel(ch.id);
+                              }
+                            }}
+                            className="p-1.5 rounded-lg bg-white/5 hover:bg-red-600/20 text-gray-400 hover:text-red-400 cursor-pointer"
+                            title="Delete Channel"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* TAB 4: USERS MANAGEMENT */}
       {activeAdminTab === 'users' && (
         <div className="space-y-4">
           <div className="flex items-center justify-between">
@@ -1624,6 +1855,158 @@ export const AdminDashboard: React.FC = () => {
                   className="px-5 py-2 bg-[#E50914] hover:bg-red-700 text-white font-bold rounded-xl shadow-md shadow-red-600/30 cursor-pointer"
                 >
                   Save User
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+      {/* FORM MODAL 4: ADD / EDIT LIVE TV CHANNEL */}
+      {isLiveTVModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md overflow-y-auto">
+          <div className="relative w-full max-w-lg bg-[#121218] border border-white/10 rounded-3xl p-6 shadow-2xl my-8">
+            <div className="flex items-center justify-between pb-3 border-b border-white/10 mb-4">
+              <div className="flex items-center gap-2">
+                <Radio className="w-5 h-5 text-[#E50914]" />
+                <h3 className="text-lg font-bold text-white font-['Outfit']">
+                  {editingLiveChannel ? `Edit ${editingLiveChannel.name}` : 'Add Live TV Channel'}
+                </h3>
+              </div>
+              <button
+                onClick={() => {
+                  setIsLiveTVModalOpen(false);
+                  setEditingLiveChannel(null);
+                }}
+                className="p-1 rounded-lg text-gray-400 hover:text-white cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveLiveChannel} className="space-y-4 text-xs">
+              <div>
+                <label className="block text-gray-300 font-semibold mb-1">
+                  Channel Name <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={liveForm.name}
+                  onChange={(e) => setLiveForm({ ...liveForm, name: e.target.value })}
+                  placeholder="e.g. NTV Uganda"
+                  className="w-full bg-[#181822] text-white p-2.5 rounded-xl border border-white/10 focus:outline-none focus:border-[#E50914]"
+                />
+              </div>
+
+              <div className="p-3 rounded-xl bg-[#181822] border border-white/10 space-y-2">
+                <label className="block text-gray-300 font-semibold">
+                  Channel Logo URL (or Upload Image)
+                </label>
+                <div className="flex items-center gap-3">
+                  {liveForm.logoUrl && (
+                    <img
+                      src={liveForm.logoUrl}
+                      alt="Logo preview"
+                      referrerPolicy="no-referrer"
+                      className="w-16 h-10 rounded-lg object-cover border border-white/10 shrink-0 bg-black"
+                    />
+                  )}
+                  <label className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white font-semibold cursor-pointer">
+                    <UploadCloud className="w-3.5 h-3.5 text-[#E50914]" />
+                    <span>{liveLogoUploading ? 'Uploading...' : 'Upload Logo File'}</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleLiveLogoUpload}
+                      disabled={liveLogoUploading}
+                      className="hidden"
+                    />
+                  </label>
+                </div>
+                <input
+                  type="text"
+                  value={liveForm.logoUrl}
+                  onChange={(e) => setLiveForm({ ...liveForm, logoUrl: e.target.value })}
+                  placeholder="https://... or data:image/svg+xml..."
+                  className="w-full bg-black/50 text-white p-2 rounded-lg border border-white/10 focus:outline-none focus:border-[#E50914] font-mono text-[11px]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-gray-300 font-semibold mb-1">
+                  YouTube Live URL / Embed URL <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="url"
+                  required
+                  value={liveForm.youtubeLiveUrl}
+                  onChange={(e) => setLiveForm({ ...liveForm, youtubeLiveUrl: e.target.value })}
+                  placeholder="https://www.youtube.com/watch?v=... or /embed/live_stream?channel=..."
+                  className="w-full bg-[#181822] text-white p-2.5 rounded-xl border border-white/10 focus:outline-none focus:border-[#E50914] font-mono text-[11px]"
+                />
+                {liveForm.youtubeLiveUrl.trim() && (
+                  <p className="text-[10px] text-emerald-400 mt-1 font-mono truncate">
+                    Embed preview: {toYouTubeEmbedUrl(liveForm.youtubeLiveUrl)}
+                  </p>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-gray-400 font-medium mb-1">
+                    Watching Now Count
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={liveForm.watchingNow}
+                    onChange={(e) => setLiveForm({ ...liveForm, watchingNow: Number(e.target.value) })}
+                    className="w-full bg-[#181822] text-white p-2.5 rounded-xl border border-white/10 focus:outline-none focus:border-[#E50914] font-mono"
+                  />
+                </div>
+
+                <div className="flex items-end pb-2">
+                  <label className="flex items-center gap-2 cursor-pointer text-gray-200 font-semibold">
+                    <input
+                      type="checkbox"
+                      checked={liveForm.isLive}
+                      onChange={(e) => setLiveForm({ ...liveForm, isLive: e.target.checked })}
+                      className="rounded accent-[#E50914]"
+                    />
+                    <span>Show RED LIVE Badge</span>
+                  </label>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-gray-400 font-medium mb-1">Description</label>
+                <input
+                  type="text"
+                  value={liveForm.description}
+                  onChange={(e) => setLiveForm({ ...liveForm, description: e.target.value })}
+                  placeholder="e.g. Live Ugandan news, Akawungeezi & talk shows"
+                  className="w-full bg-[#181822] text-white p-2.5 rounded-xl border border-white/10 focus:outline-none focus:border-[#E50914]"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-white/10">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsLiveTVModalOpen(false);
+                    setEditingLiveChannel(null);
+                  }}
+                  className="px-4 py-2 bg-white/5 hover:bg-white/10 text-gray-300 rounded-xl cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={liveLogoUploading || savingLiveChannel}
+                  className="px-5 py-2.5 bg-[#E50914] hover:bg-red-700 disabled:opacity-50 text-white font-bold rounded-xl shadow-md shadow-red-600/30 flex items-center gap-2 cursor-pointer"
+                >
+                  {savingLiveChannel && <Loader2 className="w-4 h-4 animate-spin" />}
+                  <span>{editingLiveChannel ? 'Save Channel Changes' : 'Publish Live Channel'}</span>
                 </button>
               </div>
             </form>

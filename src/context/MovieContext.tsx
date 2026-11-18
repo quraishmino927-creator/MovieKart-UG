@@ -9,8 +9,10 @@ import {
   setDoc,
   doc,
   serverTimestamp,
-  Timestamp
+  Timestamp,
+  increment
 } from 'firebase/firestore';
+import { DEFAULT_LIVE_CHANNELS } from '../lib/liveChannels';
 import {
   User,
   GoogleAuthProvider,
@@ -42,7 +44,8 @@ import {
   ContentMode,
   PlayableItem,
   ContinueWatchingItem,
-  WatchHistoryItem
+  WatchHistoryItem,
+  LiveTVChannel
 } from '../types';
 
 interface MovieContextType {
@@ -53,6 +56,8 @@ interface MovieContextType {
   firestoreError: string | null;
   tvShows: TVShow[];
   tvShowsLoading: boolean;
+  liveChannels: LiveTVChannel[];
+  activeLiveChannel: LiveTVChannel | null;
   users: UserAccount[];
   currentUser: UserAccount | null;
   isAuthenticated: boolean;
@@ -184,6 +189,18 @@ interface MovieContextType {
     synopsis?: string;
   }) => Promise<void>;
   deleteTVShow: (showId: string) => Promise<void>;
+  openLiveChannel: (channel: LiveTVChannel) => void;
+  closeLiveChannel: () => void;
+  addLiveChannel: (channel: {
+    name: string;
+    logoUrl: string;
+    youtubeLiveUrl: string;
+    description?: string;
+    watchingNow?: number;
+    isLive?: boolean;
+  }) => Promise<void>;
+  updateLiveChannel: (channel: LiveTVChannel) => Promise<void>;
+  deleteLiveChannel: (channelId: string) => Promise<void>;
   addUser: (user: Omit<UserAccount, 'id'>) => void;
   updateUser: (user: UserAccount) => void;
   deleteUser: (userId: string) => void;
@@ -203,6 +220,7 @@ const STORAGE_KEYS = {
   WATCH_HISTORY: 'moviekart_ug_watch_history',
   CURRENT_USER_ID: 'moviekart_ug_current_user_id',
   USER_PASSWORDS: 'moviekart_ug_user_passwords',
+  LIVE_CHANNELS: 'moviekart_ug_live_channels',
 };
 
 function parseTimestampMs(val: unknown): number {
@@ -245,6 +263,21 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
   const [tvShows, setTvShows] = useState<TVShow[]>([]);
   const [tvShowsLoading, setTvShowsLoading] = useState<boolean>(true);
+
+  const [liveChannels, setLiveChannels] = useState<LiveTVChannel[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.LIVE_CHANNELS);
+      if (saved) {
+        const parsed = JSON.parse(saved) as LiveTVChannel[];
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      }
+    } catch {}
+    return DEFAULT_LIVE_CHANNELS;
+  });
+  const [activeLiveChannelId, setActiveLiveChannelId] = useState<string | null>(null);
+  const activeLiveChannel = liveChannels.find((c) => c.id === activeLiveChannelId) || null;
 
   const [users, setUsers] = useState<UserAccount[]>(() => {
     try {
@@ -567,6 +600,60 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         console.warn('Firestore TV Shows listener:', JSON.stringify(info));
         setTvShows([]);
         setTvShowsLoading(false);
+      }
+    );
+
+    return () => unsubscribe();
+  }, []);
+
+  // 4. Real-time Firestore listener for "livetv" collection merged with Ugandan defaults
+  useEffect(() => {
+    const liveRef = collection(db, 'livetv');
+    const unsubscribe = onSnapshot(
+      liveRef,
+      (snapshot) => {
+        const defaultMap = new Map<string, LiveTVChannel>();
+        DEFAULT_LIVE_CHANNELS.forEach((ch) => defaultMap.set(ch.id, ch));
+
+        snapshot.docs.forEach((docSnap) => {
+          const data = docSnap.data() as Record<string, unknown>;
+          const fallback = defaultMap.get(docSnap.id);
+          const merged: LiveTVChannel = {
+            id: docSnap.id,
+            name: typeof data.name === 'string' && data.name ? data.name : fallback?.name || 'Live Channel',
+            logoUrl: typeof data.logoUrl === 'string' && data.logoUrl ? data.logoUrl : fallback?.logoUrl || '',
+            youtubeLiveUrl:
+              typeof data.youtubeLiveUrl === 'string' && data.youtubeLiveUrl
+                ? data.youtubeLiveUrl
+                : fallback?.youtubeLiveUrl || '',
+            description:
+              typeof data.description === 'string'
+                ? data.description
+                : fallback?.description || '',
+            watchingNow:
+              typeof data.watchingNow === 'number' && !Number.isNaN(data.watchingNow)
+                ? data.watchingNow
+                : fallback?.watchingNow || 100,
+            isLive: typeof data.isLive === 'boolean' ? data.isLive : true,
+            isDeleted: Boolean(data.isDeleted),
+            order: typeof data.order === 'number' ? data.order : fallback?.order || 99,
+            createdAt: parseTimestampMs(data.createdAt) || fallback?.createdAt || 0,
+            updatedAt: parseTimestampMs(data.updatedAt) || 0,
+          };
+          defaultMap.set(docSnap.id, merged);
+        });
+
+        const mergedList = Array.from(defaultMap.values())
+          .filter((ch) => !ch.isDeleted)
+          .sort((a, b) => (a.order ?? 99) - (b.order ?? 99));
+
+        setLiveChannels(mergedList);
+        try {
+          localStorage.setItem(STORAGE_KEYS.LIVE_CHANNELS, JSON.stringify(mergedList));
+        } catch {}
+      },
+      () => {
+        // Fallback smoothly to cached/default Ugandan channels
       }
     );
 
@@ -1473,6 +1560,194 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }
   };
 
+  // Live TV Playback & Watching Now Counter
+  const openLiveChannel = (channel: LiveTVChannel) => {
+    setActiveLiveChannelId(channel.id);
+    setLiveChannels((prev) => {
+      const next = prev.map((c) =>
+        c.id === channel.id ? { ...c, watchingNow: (c.watchingNow || 0) + 1 } : c
+      );
+      try {
+        localStorage.setItem(STORAGE_KEYS.LIVE_CHANNELS, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+
+    // Sync watchingNow increment to Firestore if allowed
+    setDoc(
+      doc(db, 'livetv', channel.id),
+      {
+        name: channel.name,
+        logoUrl: channel.logoUrl,
+        youtubeLiveUrl: channel.youtubeLiveUrl,
+        description: channel.description || '',
+        isLive: channel.isLive !== false,
+        order: channel.order ?? 99,
+        watchingNow: increment(1),
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    ).catch(() => {});
+  };
+
+  const closeLiveChannel = () => {
+    const closingId = activeLiveChannelId;
+    setActiveLiveChannelId(null);
+    if (closingId) {
+      setLiveChannels((prev) =>
+        prev.map((c) =>
+          c.id === closingId ? { ...c, watchingNow: Math.max(1, (c.watchingNow || 1) - 1) } : c
+        )
+      );
+    }
+  };
+
+  // Admin CRUD: Add, Update, Delete Live TV Channels
+  const addLiveChannel = async (channelData: {
+    name: string;
+    logoUrl: string;
+    youtubeLiveUrl: string;
+    description?: string;
+    watchingNow?: number;
+    isLive?: boolean;
+  }) => {
+    if (!adminAuth.currentUser) {
+      showToast('Admin sign-in required to add Live TV channels.');
+      throw new Error('Admin authentication required');
+    }
+
+    const id = `live_${Date.now()}`;
+    const newChannel: LiveTVChannel = {
+      id,
+      name: channelData.name.trim(),
+      logoUrl: channelData.logoUrl.trim(),
+      youtubeLiveUrl: channelData.youtubeLiveUrl.trim(),
+      description: (channelData.description || '').trim() || `Watch ${channelData.name.trim()} live on MovieKart UG.`,
+      watchingNow: Math.max(0, Number(channelData.watchingNow) || 120),
+      isLive: channelData.isLive !== false,
+      order: liveChannels.length + 1,
+      createdAt: Date.now(),
+    };
+
+    try {
+      await setDoc(doc(adminDb, 'livetv', id), {
+        ...newChannel,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        createdBy: adminAuth.currentUser.uid,
+      });
+      setLiveChannels((prev) => {
+        const next = [...prev.filter((c) => c.id !== id), newChannel];
+        try {
+          localStorage.setItem(STORAGE_KEYS.LIVE_CHANNELS, JSON.stringify(next));
+        } catch {}
+        return next;
+      });
+      showToast(`Added "${newChannel.name}" to Live TV!`);
+    } catch (error) {
+      const info = buildFirestoreErrorInfo(error, OperationType.CREATE, `livetv/${id}`);
+      console.error('Firestore Add Live TV Error:', JSON.stringify(info));
+      // Still update local cache & inform admin
+      setLiveChannels((prev) => {
+        const next = [...prev, newChannel];
+        try {
+          localStorage.setItem(STORAGE_KEYS.LIVE_CHANNELS, JSON.stringify(next));
+        } catch {}
+        return next;
+      });
+      showToast(`Saved "${newChannel.name}" locally (check Firestore livetv rules for cloud sync).`);
+    }
+  };
+
+  const updateLiveChannel = async (channel: LiveTVChannel) => {
+    if (!adminAuth.currentUser) {
+      showToast('Admin sign-in required to update Live TV channels.');
+      throw new Error('Admin authentication required');
+    }
+
+    const updated: LiveTVChannel = {
+      ...channel,
+      name: channel.name.trim(),
+      logoUrl: channel.logoUrl.trim(),
+      youtubeLiveUrl: channel.youtubeLiveUrl.trim(),
+      description: (channel.description || '').trim(),
+      watchingNow: Math.max(0, Number(channel.watchingNow) || 0),
+      isLive: channel.isLive !== false,
+      updatedAt: Date.now(),
+    };
+
+    try {
+      await setDoc(
+        doc(adminDb, 'livetv', channel.id),
+        {
+          name: updated.name,
+          logoUrl: updated.logoUrl,
+          youtubeLiveUrl: updated.youtubeLiveUrl,
+          description: updated.description,
+          watchingNow: updated.watchingNow,
+          isLive: updated.isLive,
+          order: updated.order ?? 99,
+          isDeleted: false,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+      setLiveChannels((prev) => {
+        const next = prev.map((c) => (c.id === updated.id ? updated : c));
+        try {
+          localStorage.setItem(STORAGE_KEYS.LIVE_CHANNELS, JSON.stringify(next));
+        } catch {}
+        return next;
+      });
+      showToast(`Updated Live TV channel "${updated.name}"`);
+    } catch (error) {
+      const info = buildFirestoreErrorInfo(error, OperationType.UPDATE, `livetv/${channel.id}`);
+      console.error('Firestore Update Live TV Error:', JSON.stringify(info));
+      setLiveChannels((prev) => {
+        const next = prev.map((c) => (c.id === updated.id ? updated : c));
+        try {
+          localStorage.setItem(STORAGE_KEYS.LIVE_CHANNELS, JSON.stringify(next));
+        } catch {}
+        return next;
+      });
+      showToast(`Updated "${updated.name}" locally.`);
+    }
+  };
+
+  const deleteLiveChannel = async (channelId: string) => {
+    if (!adminAuth.currentUser) {
+      showToast('Admin sign-in required to delete Live TV channels.');
+      return;
+    }
+
+    const isDefault = DEFAULT_LIVE_CHANNELS.some((d) => d.id === channelId);
+    try {
+      if (isDefault) {
+        await setDoc(
+          doc(adminDb, 'livetv', channelId),
+          { isDeleted: true, updatedAt: serverTimestamp() },
+          { merge: true }
+        );
+      } else {
+        await deleteDoc(doc(adminDb, 'livetv', channelId));
+      }
+    } catch (error) {
+      console.warn('Firestore Delete Live TV error:', error);
+    }
+
+    setLiveChannels((prev) => {
+      const next = prev.filter((c) => c.id !== channelId);
+      try {
+        localStorage.setItem(STORAGE_KEYS.LIVE_CHANNELS, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+    if (activeLiveChannelId === channelId) {
+      setActiveLiveChannelId(null);
+    }
+    showToast('Live TV channel removed');
+  };
+
   // User account local management
   const addUser = (userData: Omit<UserAccount, 'id'>) => {
     const newUser: UserAccount = {
@@ -2007,6 +2282,8 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         firestoreError,
         tvShows,
         tvShowsLoading,
+        liveChannels,
+        activeLiveChannel,
         users,
         currentUser,
         isAuthenticated,
@@ -2069,6 +2346,11 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         deleteMovie,
         addEpisodeToShow,
         deleteTVShow,
+        openLiveChannel,
+        closeLiveChannel,
+        addLiveChannel,
+        updateLiveChannel,
+        deleteLiveChannel,
         addUser,
         updateUser,
         deleteUser,

@@ -9,6 +9,7 @@ import { MovieGrid } from './components/MovieGrid';
 import { MovieDetailsModal } from './components/MovieDetailsModal';
 import { TVShowDetailsModal } from './components/TVShowDetailsModal';
 import { TVShowsSection } from './components/TVShowsSection';
+import { LiveTVSection } from './components/LiveTVSection';
 import { VideoPlayerModal } from './components/VideoPlayerModal';
 import { SearchView } from './components/SearchView';
 import { WatchlistView } from './components/WatchlistView';
@@ -234,6 +235,7 @@ const MainContent: React.FC = () => {
           </div>
         )}
 
+        {activeTab === 'livetv' && <LiveTVSection />}
         {activeTab === 'search' && <SearchView />}
         {activeTab === 'watchlist' && <WatchlistView />}
         {activeTab === 'downloads' && <DownloadsView />}

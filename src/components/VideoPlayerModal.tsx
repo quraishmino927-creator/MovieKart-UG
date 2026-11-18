@@ -10,6 +10,7 @@ import {
   Film
 } from 'lucide-react';
 import { VJTrack } from '../types';
+import { isYouTubeUrl, toYouTubeEmbedUrl } from '../lib/liveChannels';
 
 function toDriveEmbedUrl(rawUrl: string): string {
   let trimmed = (rawUrl || '').trim();
@@ -73,7 +74,10 @@ export const VideoPlayerModal: React.FC = () => {
   const item = currentlyPlayingItem;
   const videoUrl = item?.videoUrl || '';
   const isGoogleDrive = videoUrl.toLowerCase().includes('drive.google.com');
+  const isYouTube = !isGoogleDrive && isYouTubeUrl(videoUrl);
+  const isIframeEmbed = isGoogleDrive || isYouTube;
   const driveSrc = isGoogleDrive ? toDriveEmbedUrl(videoUrl) : '';
+  const youtubeSrc = isYouTube ? toYouTubeEmbedUrl(videoUrl) : '';
 
   const parentMovie = item
     ? item.movieId
@@ -295,7 +299,7 @@ export const VideoPlayerModal: React.FC = () => {
             </button>
           )}
 
-          {!isDownloaded && !isGoogleDrive && (
+          {!isDownloaded && !isIframeEmbed && (
             <button
               onClick={() =>
                 startDownload({
@@ -330,6 +334,17 @@ export const VideoPlayerModal: React.FC = () => {
             title={item.title}
             className="w-full max-w-6xl bg-black"
           />
+        ) : isYouTube ? (
+          <iframe
+            src={youtubeSrc}
+            width="100%"
+            height="500px"
+            style={{ border: '0', backgroundColor: '#000000' }}
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen"
+            allowFullScreen
+            title={item.title}
+            className="w-full max-w-6xl aspect-video bg-black"
+          />
         ) : (
           <video
             ref={videoRef}
@@ -346,15 +361,15 @@ export const VideoPlayerModal: React.FC = () => {
         )}
 
         {/* Offline Badge Notification */}
-        {isDownloaded && !item.isTrailer && !isGoogleDrive && (
+        {isDownloaded && !item.isTrailer && !isIframeEmbed && (
           <div className="absolute top-4 left-4 z-20 bg-emerald-600/90 text-white text-xs font-bold px-3 py-1.5 rounded-lg flex items-center gap-2 shadow-lg backdrop-blur-sm pointer-events-none">
             <CheckCircle2 className="w-4 h-4 text-emerald-200" />
             <span>Streaming from Offline Storage</span>
           </div>
         )}
 
-        {/* Ugandan VJ Live Commentary Speech Bubble overlay (non-Drive direct video streams) */}
-        {!isGoogleDrive && activeVJTrack && showVJCommentary && currentVJQuote && (
+        {/* Ugandan VJ Live Commentary Speech Bubble overlay (non-iframe direct video streams) */}
+        {!isIframeEmbed && activeVJTrack && showVJCommentary && currentVJQuote && (
           <div className="absolute top-4 right-4 sm:left-6 sm:right-auto z-20 max-w-xs sm:max-w-md pointer-events-none">
             <div className="bg-red-950/90 border border-red-500/60 text-white rounded-2xl p-3 shadow-2xl backdrop-blur-md">
               <div className="flex items-center gap-2 mb-1">
@@ -371,7 +386,7 @@ export const VideoPlayerModal: React.FC = () => {
         )}
 
         {/* Teaser Trailer Completion Screen (for standard video files) */}
-        {hasEnded && item.isTrailer && !isGoogleDrive && (
+        {hasEnded && item.isTrailer && !isIframeEmbed && (
           <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-black/90 backdrop-blur-md p-6 text-center">
             <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-red-600 to-red-900 border border-red-500/50 text-white flex items-center justify-center mb-4 shadow-xl shadow-red-950/60">
               <Film className="w-8 h-8" />

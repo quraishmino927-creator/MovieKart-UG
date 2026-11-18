@@ -8,7 +8,21 @@ export type Genre =
   | 'Thriller'
   | 'Animation';
 
-export type ContentMode = 'movies' | 'tvshows';
+export type ContentMode = 'movies' | 'tvshows' | 'livetv';
+
+export interface LiveTVChannel {
+  id: string;
+  name: string;
+  logoUrl: string;
+  youtubeLiveUrl: string;
+  description?: string;
+  watchingNow: number;
+  isLive?: boolean;
+  isDeleted?: boolean;
+  order?: number;
+  createdAt?: number;
+  updatedAt?: number;
+}
 
 export interface VJTrack {
   id: string;
@@ -179,4 +193,4 @@ export interface UserAccount {
   moviesWatchedCount?: number;
 }
 
-export type ActiveTab = 'home' | 'search' | 'watchlist' | 'downloads' | 'profile' | 'admin';
+export type ActiveTab = 'home' | 'livetv' | 'search' | 'watchlist' | 'downloads' | 'profile' | 'admin';
