@@ -1,8 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { useMovieContext } from '../context/MovieContext';
 import { LiveTVChannel } from '../types';
-import { isYouTubeUrl, toYouTubeEmbedUrl, toYouTubeWatchLink } from '../lib/liveChannels';
-import { Radio, Play, Eye, X, ExternalLink, Tv } from 'lucide-react';
+import {
+  isYouTubeUrl,
+  toYouTubeEmbedUrl,
+  toYouTubeWatchLink,
+  resolveYouTubeStream,
+  getCachedResolvedYouTubeStream,
+  ResolvedYouTubeStream,
+} from '../lib/liveChannels';
+import { Radio, Play, Eye, X, ExternalLink, Tv, Loader2, Film } from 'lucide-react';
 
 const ChannelLogo: React.FC<{ channel: LiveTVChannel; className?: string }> = ({
   channel,
@@ -42,6 +49,76 @@ export const LiveTVSection: React.FC = () => {
     closeLiveChannel
   } = useMovieContext();
 
+  const [resolvedStreams, setResolvedStreams] = useState<Record<string, ResolvedYouTubeStream>>({});
+  const [resolvingChannelId, setResolvingChannelId] = useState<string | null>(null);
+
+  // Prefetch YouTube Live / latest-video fallback status for channel cards so clicks open instantaneously
+  useEffect(() => {
+    let cancelled = false;
+    const ytChannels = liveChannels.filter((ch) => isYouTubeUrl(ch.youtubeLiveUrl));
+    if (ytChannels.length === 0) return;
+
+    ytChannels.forEach((ch) => {
+      const cached = getCachedResolvedYouTubeStream(ch.youtubeLiveUrl);
+      if (cached) {
+        setResolvedStreams((prev) => ({ ...prev, [ch.youtubeLiveUrl]: cached }));
+        return;
+      }
+      resolveYouTubeStream(ch.youtubeLiveUrl)
+        .then((res) => {
+          if (!cancelled && res.embedUrl) {
+            setResolvedStreams((prev) => ({ ...prev, [ch.youtubeLiveUrl]: res }));
+          }
+        })
+        .catch(() => {});
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [liveChannels]);
+
+  // Resolve the active channel immediately when opened (if not already cached)
+  useEffect(() => {
+    if (!activeLiveChannel) {
+      setResolvingChannelId(null);
+      return;
+    }
+
+    const url = activeLiveChannel.youtubeLiveUrl;
+    if (!isYouTubeUrl(url)) {
+      setResolvingChannelId(null);
+      return;
+    }
+
+    const cached = getCachedResolvedYouTubeStream(url) || resolvedStreams[url];
+    if (cached?.embedUrl) {
+      setResolvedStreams((prev) => ({ ...prev, [url]: cached }));
+      setResolvingChannelId(null);
+      return;
+    }
+
+    let cancelled = false;
+    setResolvingChannelId(activeLiveChannel.id);
+
+    resolveYouTubeStream(url)
+      .then((res) => {
+        if (!cancelled) {
+          setResolvedStreams((prev) => ({ ...prev, [url]: res }));
+          setResolvingChannelId(null);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setResolvingChannelId(null);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeLiveChannel?.id, activeLiveChannel?.youtubeLiveUrl]);
+
   // Keyboard Escape support for closing Live TV Player
   useEffect(() => {
     if (!activeLiveChannel) return;
@@ -59,15 +136,31 @@ export const LiveTVSection: React.FC = () => {
     0
   );
 
+  const activeIsYouTube = activeLiveChannel ? isYouTubeUrl(activeLiveChannel.youtubeLiveUrl) : false;
+  const activeResolved = activeLiveChannel
+    ? resolvedStreams[activeLiveChannel.youtubeLiveUrl] ||
+      getCachedResolvedYouTubeStream(activeLiveChannel.youtubeLiveUrl)
+    : null;
+
+  const isLoadingActiveStream =
+    Boolean(activeLiveChannel) &&
+    activeIsYouTube &&
+    resolvingChannelId === activeLiveChannel?.id &&
+    !activeResolved?.embedUrl;
+
   const embedUrl = activeLiveChannel
-    ? isYouTubeUrl(activeLiveChannel.youtubeLiveUrl)
-      ? toYouTubeEmbedUrl(activeLiveChannel.youtubeLiveUrl)
+    ? activeIsYouTube
+      ? activeResolved?.embedUrl || toYouTubeEmbedUrl(activeLiveChannel.youtubeLiveUrl)
       : activeLiveChannel.youtubeLiveUrl
     : '';
 
   const directYouTubeLink = activeLiveChannel
-    ? toYouTubeWatchLink(activeLiveChannel.youtubeLiveUrl)
+    ? activeResolved?.watchUrl || toYouTubeWatchLink(activeLiveChannel.youtubeLiveUrl)
     : '';
+
+  const isPlayingFallbackLatest =
+    Boolean(activeResolved) &&
+    (activeResolved?.mode === 'latest_video' || activeResolved?.mode === 'playlist_fallback');
 
   return (
     <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8 space-y-6">
@@ -216,18 +309,31 @@ export const LiveTVSection: React.FC = () => {
               </div>
 
               <div className="min-w-0">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <h2 className="text-sm sm:text-base font-extrabold text-white font-['Outfit'] truncate">
                     {activeLiveChannel.name}
                   </h2>
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#E50914] text-white text-[10px] font-black uppercase tracking-wider shrink-0">
-                    <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
-                    LIVE
-                  </span>
+                  {isPlayingFallbackLatest ? (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-500/20 border border-amber-400/40 text-amber-300 text-[10px] font-extrabold uppercase tracking-wider shrink-0">
+                      <Film className="w-3 h-3" />
+                      Latest Video · Channel Offline
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#E50914] text-white text-[10px] font-black uppercase tracking-wider shrink-0">
+                      <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+                      LIVE
+                    </span>
+                  )}
                 </div>
                 <p className="text-xs text-gray-400 flex items-center gap-1.5 tabular-nums truncate">
-                  <Eye className="w-3.5 h-3.5 text-[#E50914]" />
+                  <Eye className="w-3.5 h-3.5 text-[#E50914] shrink-0" />
                   <span>{(activeLiveChannel.watchingNow || 0).toLocaleString()} watching now</span>
+                  {activeResolved?.title && (
+                    <>
+                      <span className="text-gray-600" aria-hidden="true">·</span>
+                      <span className="text-gray-300 truncate">{activeResolved.title}</span>
+                    </>
+                  )}
                 </p>
               </div>
             </div>
@@ -248,8 +354,18 @@ export const LiveTVSection: React.FC = () => {
 
           {/* Main Black Video Area */}
           <div className="flex-1 bg-black flex items-center justify-center p-0 sm:p-4 overflow-hidden">
-            <div className="w-full max-w-6xl aspect-video max-h-full bg-black rounded-none sm:rounded-2xl overflow-hidden border-0 sm:border sm:border-white/10">
-              {isYouTubeUrl(activeLiveChannel.youtubeLiveUrl) || embedUrl.includes('youtube.com') ? (
+            <div className="w-full max-w-6xl aspect-video max-h-full bg-black rounded-none sm:rounded-2xl overflow-hidden border-0 sm:border sm:border-white/10 flex items-center justify-center">
+              {isLoadingActiveStream ? (
+                <div className="flex flex-col items-center justify-center gap-3 text-center p-6">
+                  <Loader2 className="w-9 h-9 text-[#E50914] animate-spin" />
+                  <p className="text-sm font-bold text-white">
+                    Connecting to {activeLiveChannel.name}...
+                  </p>
+                  <p className="text-xs text-gray-400">
+                    Checking live stream or loading latest broadcast
+                  </p>
+                </div>
+              ) : activeIsYouTube || embedUrl.includes('youtube.com') ? (
                 <iframe
                   key={activeLiveChannel.id + embedUrl}
                   src={embedUrl}

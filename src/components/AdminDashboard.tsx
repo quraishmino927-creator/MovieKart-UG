@@ -1934,19 +1934,19 @@ export const AdminDashboard: React.FC = () => {
 
               <div>
                 <label className="block text-gray-300 font-semibold mb-1">
-                  YouTube Live URL / Embed URL <span className="text-red-500">*</span>
+                  YouTube Channel Live URL or Video URL <span className="text-red-500">*</span>
                 </label>
                 <input
-                  type="url"
+                  type="text"
                   required
                   value={liveForm.youtubeLiveUrl}
                   onChange={(e) => setLiveForm({ ...liveForm, youtubeLiveUrl: e.target.value })}
-                  placeholder="https://www.youtube.com/watch?v=... or /embed/live_stream?channel=..."
+                  placeholder="https://www.youtube.com/@ntvuganda/live"
                   className="w-full bg-[#181822] text-white p-2.5 rounded-xl border border-white/10 focus:outline-none focus:border-[#E50914] font-mono text-[11px]"
                 />
                 {liveForm.youtubeLiveUrl.trim() && (
                   <p className="text-[10px] text-emerald-400 mt-1 font-mono truncate">
-                    Embed preview: {toYouTubeEmbedUrl(liveForm.youtubeLiveUrl)}
+                    Auto-resolves live stream or latest video if offline ({toYouTubeEmbedUrl(liveForm.youtubeLiveUrl)})
                   </p>
                 )}
               </div>

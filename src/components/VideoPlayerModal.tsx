@@ -10,7 +10,7 @@ import {
   Film
 } from 'lucide-react';
 import { VJTrack } from '../types';
-import { isYouTubeUrl, toYouTubeEmbedUrl } from '../lib/liveChannels';
+import { isYouTubeUrl, toYouTubeEmbedUrl, resolveYouTubeStream } from '../lib/liveChannels';
 
 function toDriveEmbedUrl(rawUrl: string): string {
   let trimmed = (rawUrl || '').trim();
@@ -77,7 +77,28 @@ export const VideoPlayerModal: React.FC = () => {
   const isYouTube = !isGoogleDrive && isYouTubeUrl(videoUrl);
   const isIframeEmbed = isGoogleDrive || isYouTube;
   const driveSrc = isGoogleDrive ? toDriveEmbedUrl(videoUrl) : '';
-  const youtubeSrc = isYouTube ? toYouTubeEmbedUrl(videoUrl) : '';
+  const [resolvedYoutubeUrl, setResolvedYoutubeUrl] = useState<string>('');
+
+  useEffect(() => {
+    if (!isYouTube || !videoUrl) {
+      setResolvedYoutubeUrl('');
+      return;
+    }
+    let cancelled = false;
+    setResolvedYoutubeUrl(toYouTubeEmbedUrl(videoUrl));
+    resolveYouTubeStream(videoUrl)
+      .then((res) => {
+        if (!cancelled && res.embedUrl) {
+          setResolvedYoutubeUrl(res.embedUrl);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [isYouTube, videoUrl]);
+
+  const youtubeSrc = isYouTube ? resolvedYoutubeUrl || toYouTubeEmbedUrl(videoUrl) : '';
 
   const parentMovie = item
     ? item.movieId

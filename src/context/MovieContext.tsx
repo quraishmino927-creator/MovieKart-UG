@@ -270,7 +270,13 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       if (saved) {
         const parsed = JSON.parse(saved) as LiveTVChannel[];
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
+          return parsed.map((ch) => {
+            const def = DEFAULT_LIVE_CHANNELS.find((d) => d.id === ch.id);
+            if (def && ch.youtubeLiveUrl?.includes('embed/live_stream?channel=')) {
+              return { ...ch, youtubeLiveUrl: def.youtubeLiveUrl };
+            }
+            return ch;
+          });
         }
       }
     } catch {}
@@ -623,7 +629,9 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             name: typeof data.name === 'string' && data.name ? data.name : fallback?.name || 'Live Channel',
             logoUrl: typeof data.logoUrl === 'string' && data.logoUrl ? data.logoUrl : fallback?.logoUrl || '',
             youtubeLiveUrl:
-              typeof data.youtubeLiveUrl === 'string' && data.youtubeLiveUrl
+              typeof data.youtubeLiveUrl === 'string' &&
+              data.youtubeLiveUrl &&
+              !(fallback && data.youtubeLiveUrl.includes('embed/live_stream?channel='))
                 ? data.youtubeLiveUrl
                 : fallback?.youtubeLiveUrl || '',
             description:
