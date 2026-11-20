@@ -28,10 +28,18 @@ import {
   auth,
   adminDb,
   adminAuth,
+  inviteAuth,
   OperationType,
   buildFirestoreErrorInfo,
   testFirestoreConnection
 } from '../lib/firebase';
+import {
+  createInitialTrialDates,
+  getUserTrialInfo,
+  TrialInfo,
+  MS_PER_DAY,
+  TRIAL_DURATION_DAYS
+} from '../lib/trial';
 import {
   Movie,
   TVShow,
@@ -46,7 +54,10 @@ import {
   ContinueWatchingItem,
   WatchHistoryItem,
   LiveTVChannel,
-  VJFilter
+  VJFilter,
+  TeamMember,
+  TeamRole,
+  TrialStatus
 } from '../types';
 
 interface MovieContextType {
@@ -61,6 +72,8 @@ interface MovieContextType {
   activeLiveChannel: LiveTVChannel | null;
   users: UserAccount[];
   currentUser: UserAccount | null;
+  currentUserTrialInfo: TrialInfo | null;
+  hasSignedUpBefore: boolean;
   isAuthenticated: boolean;
   watchlist: string[];
   downloads: DownloadItem[];
@@ -76,8 +89,11 @@ interface MovieContextType {
   currentlyPlayingItem: PlayableItem | null;
   selectedVJTrack: VJTrack | null;
   adminUser: User | null;
+  adminRole: TeamRole | null;
+  staffEmail: string | null;
   adminAuthLoading: boolean;
   isAdminAuthenticated: boolean;
+  teamMembers: TeamMember[];
   toastMessage: string | null;
 
   // Actions
@@ -150,6 +166,15 @@ interface MovieContextType {
   getUserRating: (movieId: string) => number | undefined;
 
   // Viewer Session & Profile Actions
+  signUpWithEmailOrPhone: (
+    fullName: string,
+    emailOrPhone: string,
+    password: string
+  ) => Promise<{ success: boolean; error?: string }>;
+  loginWithEmailOrPhone: (
+    emailOrPhone: string,
+    password: string
+  ) => Promise<{ success: boolean; error?: string }>;
   signUpWithGoogle: () => Promise<{ success: boolean; error?: string }>;
   signUpWithPhone: (
     phoneNumber: string,
@@ -168,6 +193,12 @@ interface MovieContextType {
     username: string;
     avatar: string;
   }) => Promise<{ success: boolean; error?: string }>;
+  subscribeCurrentUser: (
+    plan: 'MovieKart VIP' | 'Standard HD',
+    momoProvider: 'MTN Mobile Money' | 'Airtel Money',
+    momoPhone?: string
+  ) => Promise<{ success: boolean; error?: string }>;
+  setUserBillingStatus: (userId: string, status: TrialStatus) => Promise<void>;
   logoutUser: () => Promise<void>;
   switchUserAccount: (user: UserAccount) => void;
 
@@ -178,6 +209,13 @@ interface MovieContextType {
   // Firebase Admin Auth & Firestore CRUD Actions
   loginAdminWithEmail: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
   logoutAdmin: () => Promise<void>;
+  inviteTeamMember: (
+    email: string,
+    password: string,
+    role?: TeamRole
+  ) => Promise<{ success: boolean; error?: string }>;
+  removeTeamMember: (memberId: string) => Promise<void>;
+  isOwnedByCurrentStaff: (item: { createdBy?: string; createdByEmail?: string }) => boolean;
   addMovie: (movie: Omit<Movie, 'id'>) => Promise<void>;
   updateMovie: (movie: Movie) => Promise<void>;
   deleteMovie: (movieId: string) => Promise<void>;
@@ -224,6 +262,9 @@ const STORAGE_KEYS = {
   CURRENT_USER_ID: 'moviekart_ug_current_user_id',
   USER_PASSWORDS: 'moviekart_ug_user_passwords',
   LIVE_CHANNELS: 'moviekart_ug_live_channels',
+  HAS_SIGNED_UP: 'moviekart_ug_has_signed_up',
+  TEAM_MEMBERS: 'moviekart_ug_team_members',
+  POSTER_SESSION: 'moviekart_ug_poster_session',
 };
 
 function parseTimestampMs(val: unknown): number {
@@ -420,10 +461,75 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const [currentlyPlayingItem, setCurrentlyPlayingItem] = useState<PlayableItem | null>(null);
   const [selectedVJTrack, setSelectedVJTrack] = useState<VJTrack | null>(null);
 
-  // Firebase Admin Auth state
+  // Firebase Admin & Poster RBAC Auth state
   const [adminUser, setAdminUser] = useState<User | null>(null);
   const [adminAuthLoading, setAdminAuthLoading] = useState<boolean>(true);
-  const isAdminAuthenticated = !!adminUser;
+  const [posterSessionEmail, setPosterSessionEmail] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(STORAGE_KEYS.POSTER_SESSION) || null;
+    } catch {
+      return null;
+    }
+  });
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.TEAM_MEMBERS);
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [hasSignedUpBefore, setHasSignedUpBefore] = useState<boolean>(() => {
+    try {
+      if (localStorage.getItem(STORAGE_KEYS.HAS_SIGNED_UP) === 'true') return true;
+      const savedUsers = localStorage.getItem(STORAGE_KEYS.USERS);
+      if (savedUsers) {
+        const parsed = JSON.parse(savedUsers);
+        if (Array.isArray(parsed) && parsed.length > 0) return true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  });
+
+  // Live minute ticker so 30-day free trial countdown updates automatically
+  const [trialNowMs, setTrialNowMs] = useState<number>(() => Date.now());
+  useEffect(() => {
+    const interval = setInterval(() => setTrialNowMs(Date.now()), 60 * 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const currentUserTrialInfo: TrialInfo | null = currentUser
+    ? getUserTrialInfo(currentUser, trialNowMs)
+    : null;
+
+  const staffEmail = (adminUser?.email || posterSessionEmail || '').trim().toLowerCase() || null;
+  const matchedTeamMember = staffEmail
+    ? teamMembers.find(
+        (m) => m.status !== 'removed' && m.email.trim().toLowerCase() === staffEmail
+      )
+    : undefined;
+
+  const adminRole: TeamRole | null = !staffEmail
+    ? null
+    : posterSessionEmail && !adminUser
+      ? 'Poster'
+      : matchedTeamMember?.role === 'Poster'
+        ? 'Poster'
+        : 'Admin';
+
+  const isAdminAuthenticated = Boolean(adminUser || posterSessionEmail);
+
+  const isOwnedByCurrentStaff = (item: { createdBy?: string; createdByEmail?: string }): boolean => {
+    if (adminRole === 'Admin') return true;
+    if (adminRole !== 'Poster' || !staffEmail) return false;
+    const itemEmail = (item.createdByEmail || '').trim().toLowerCase();
+    if (itemEmail && itemEmail === staffEmail) return true;
+    if (adminUser?.uid && item.createdBy === adminUser.uid) return true;
+    if (item.createdBy && item.createdBy.trim().toLowerCase() === staffEmail) return true;
+    return false;
+  };
 
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
@@ -432,6 +538,13 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     setTimeout(() => {
       setToastMessage((prev) => (prev === msg ? null : prev));
     }, 3200);
+  };
+
+  const markHasSignedUp = () => {
+    setHasSignedUpBefore(true);
+    try {
+      localStorage.setItem(STORAGE_KEYS.HAS_SIGNED_UP, 'true');
+    } catch {}
   };
 
   // 1. Validate Firestore connection & listen to isolated Firebase Admin Auth + Viewer Auth state
@@ -454,7 +567,7 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     };
   }, []);
 
-  // Also refresh local session (e.g. phone sign-in) from Firestore on initial load
+  // Also refresh local session (e.g. phone/email sign-in) from Firestore on initial load
   useEffect(() => {
     const savedId = currentUser?.id;
     if (!savedId) return;
@@ -464,6 +577,15 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         const data = snap.data() as Record<string, unknown>;
         setCurrentUser((prev) => {
           if (!prev || prev.id !== savedId) return prev;
+          const trialStart =
+            parseTimestampMs(data.trialStartDate) ||
+            prev.trialStartDate ||
+            parseTimestampMs(data.createdAt) ||
+            Date.now();
+          const trialEnd =
+            parseTimestampMs(data.trialEndDate) ||
+            prev.trialEndDate ||
+            trialStart + TRIAL_DURATION_DAYS * MS_PER_DAY;
           const merged: UserAccount = {
             ...prev,
             name: typeof data.name === 'string' && data.name ? data.name : prev.name,
@@ -471,6 +593,21 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             avatar: typeof data.avatar === 'string' && data.avatar ? data.avatar : prev.avatar,
             joinedDate:
               typeof data.joinedDate === 'string' && data.joinedDate ? data.joinedDate : prev.joinedDate,
+            trialStartDate: trialStart,
+            trialEndDate: trialEnd,
+            trialStatus:
+              data.trialStatus === 'Paid' || data.trialStatus === 'Expired' || data.trialStatus === 'Free Trial'
+                ? data.trialStatus
+                : prev.trialStatus,
+            isPaid: typeof data.isPaid === 'boolean' ? data.isPaid : prev.isPaid,
+            paidAt: parseTimestampMs(data.paidAt) || prev.paidAt,
+            status: data.status === 'suspended' ? 'suspended' : prev.status || 'active',
+            subscription:
+              data.subscription === 'MovieKart VIP' ||
+              data.subscription === 'Standard HD' ||
+              data.subscription === 'Free Pass'
+                ? data.subscription
+                : prev.subscription,
             moviesWatchedCount:
               typeof data.moviesWatchedCount === 'number'
                 ? data.moviesWatchedCount
@@ -566,6 +703,8 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             vjTracks: loadedVjTracks,
             viewsCount: typeof data.viewsCount === 'number' ? data.viewsCount : 0,
             createdAt: parseTimestampMs(data.createdAt),
+            createdBy: typeof data.createdBy === 'string' ? data.createdBy : undefined,
+            createdByEmail: typeof data.createdByEmail === 'string' ? data.createdByEmail : undefined,
           };
         });
 
@@ -619,6 +758,8 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             vjTracks: Array.isArray(data.vjTracks) ? (data.vjTracks as VJTrack[]) : [],
             seasons: Array.isArray(data.seasons) ? (data.seasons as TVShow['seasons']) : [],
             viewsCount: typeof data.viewsCount === 'number' ? data.viewsCount : 0,
+            createdBy: typeof data.createdBy === 'string' ? data.createdBy : undefined,
+            createdByEmail: typeof data.createdByEmail === 'string' ? data.createdByEmail : undefined,
           };
         });
         setTvShows(loadedShows);
@@ -670,6 +811,8 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             order: typeof data.order === 'number' ? data.order : fallback?.order || 99,
             createdAt: parseTimestampMs(data.createdAt) || fallback?.createdAt || 0,
             updatedAt: parseTimestampMs(data.updatedAt) || 0,
+            createdBy: typeof data.createdBy === 'string' ? data.createdBy : undefined,
+            createdByEmail: typeof data.createdByEmail === 'string' ? data.createdByEmail : undefined,
           };
           defaultMap.set(docSnap.id, merged);
         });
@@ -690,6 +833,154 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
     return () => unsubscribe();
   }, []);
+
+  // 5. Real-time Firestore listener for "users" collection (powers Admin Users page & live trial/paid sync)
+  useEffect(() => {
+    const targetDb = adminUser ? adminDb : db;
+    const usersRef = collection(targetDb, 'users');
+    const unsubscribe = onSnapshot(
+      usersRef,
+      (snapshot) => {
+        const remoteUsers: UserAccount[] = snapshot.docs.map((docSnap) => {
+          const data = docSnap.data() as Record<string, unknown>;
+          const createdMs =
+            parseTimestampMs(data.createdAt) ||
+            parseTimestampMs(data.trialStartDate) ||
+            (typeof data.joinedDate === 'string' && !Number.isNaN(Date.parse(data.joinedDate))
+              ? Date.parse(data.joinedDate)
+              : Date.now());
+          const trialStartDate = parseTimestampMs(data.trialStartDate) || createdMs;
+          const trialEndDate =
+            parseTimestampMs(data.trialEndDate) ||
+            trialStartDate + TRIAL_DURATION_DAYS * MS_PER_DAY;
+          const joinedDate =
+            typeof data.joinedDate === 'string' && data.joinedDate && data.joinedDate !== 'Just now'
+              ? data.joinedDate
+              : new Date(createdMs).toLocaleDateString('en-GB', {
+                  day: 'numeric',
+                  month: 'short',
+                  year: 'numeric',
+                });
+
+          return {
+            id: docSnap.id,
+            name: typeof data.name === 'string' && data.name ? data.name : 'MovieKart Viewer',
+            username: typeof data.username === 'string' ? data.username : undefined,
+            email: typeof data.email === 'string' ? data.email : '',
+            phone: typeof data.phone === 'string' ? data.phone : '',
+            avatar: typeof data.avatar === 'string' && data.avatar ? data.avatar : '/pwa-192x192.png',
+            authProvider:
+              data.authProvider === 'google' || data.authProvider === 'phone' || data.authProvider === 'email'
+                ? data.authProvider
+                : 'email',
+            subscription:
+              data.subscription === 'MovieKart VIP' ||
+              data.subscription === 'Standard HD' ||
+              data.subscription === 'Free Pass'
+                ? data.subscription
+                : 'Free Pass',
+            status: data.status === 'suspended' ? 'suspended' : 'active',
+            joinedDate,
+            createdAt: createdMs,
+            trialStartDate,
+            trialEndDate,
+            trialStatus:
+              data.trialStatus === 'Paid' ||
+              data.trialStatus === 'Expired' ||
+              data.trialStatus === 'Free Trial'
+                ? data.trialStatus
+                : undefined,
+            isPaid: Boolean(data.isPaid),
+            paidAt: parseTimestampMs(data.paidAt) || undefined,
+            momoProvider:
+              data.momoProvider === 'Airtel Money' ? 'Airtel Money' : 'MTN Mobile Money',
+            storageUsedMb: typeof data.storageUsedMb === 'number' ? data.storageUsedMb : 0,
+            downloadsCount: typeof data.downloadsCount === 'number' ? data.downloadsCount : 0,
+            moviesWatchedCount: typeof data.moviesWatchedCount === 'number' ? data.moviesWatchedCount : 0,
+          };
+        });
+
+        setUsers((prev) => {
+          const map = new Map<string, UserAccount>();
+          prev.forEach((u) => map.set(u.id, u));
+          remoteUsers.forEach((u) => map.set(u.id, { ...(map.get(u.id) || {}), ...u }));
+          const mergedList = Array.from(map.values()).sort(
+            (a, b) => (b.createdAt || b.trialStartDate || 0) - (a.createdAt || a.trialStartDate || 0)
+          );
+          try {
+            localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(mergedList));
+          } catch {}
+          return mergedList;
+        });
+
+        // Keep logged-in currentUser synced if Admin updates their Paid/Expired/Active status
+        setCurrentUser((prev) => {
+          if (!prev) return prev;
+          const remoteMatch = remoteUsers.find((u) => u.id === prev.id);
+          if (!remoteMatch) return prev;
+          const updated: UserAccount = {
+            ...prev,
+            isPaid: remoteMatch.isPaid,
+            trialStatus: remoteMatch.trialStatus,
+            trialStartDate: remoteMatch.trialStartDate,
+            trialEndDate: remoteMatch.trialEndDate,
+            subscription: remoteMatch.subscription,
+            status: remoteMatch.status,
+          };
+          try {
+            localStorage.setItem(`moviekart_ug_user_${updated.id}_profile`, JSON.stringify(updated));
+          } catch {}
+          return updated;
+        });
+      },
+      () => {
+        // Fallback silently to local users cache if Firestore users list rules restrict read
+      }
+    );
+
+    return () => unsubscribe();
+  }, [adminUser?.uid]);
+
+  // 6. Real-time Firestore listener for "team_members" collection
+  useEffect(() => {
+    const targetDb = adminUser ? adminDb : db;
+    const teamRef = collection(targetDb, 'team_members');
+    const unsubscribe = onSnapshot(
+      teamRef,
+      (snapshot) => {
+        const remoteMembers: TeamMember[] = snapshot.docs
+          .map((docSnap): TeamMember => {
+            const data = docSnap.data() as Record<string, unknown>;
+            return {
+              id: docSnap.id,
+              email: typeof data.email === 'string' ? data.email.trim().toLowerCase() : '',
+              role: (data.role === 'Admin' ? 'Admin' : 'Poster') as TeamRole,
+              password: typeof data.password === 'string' ? data.password : undefined,
+              invitedBy: typeof data.invitedBy === 'string' ? data.invitedBy : undefined,
+              createdAt: parseTimestampMs(data.createdAt),
+              status: (data.status === 'removed' ? 'removed' : 'active') as TeamMember['status'],
+            };
+          })
+          .filter((m) => Boolean(m.email) && m.status !== 'removed');
+
+        setTeamMembers((prev) => {
+          const map = new Map<string, TeamMember>();
+          prev.forEach((m) => map.set(m.id, m));
+          remoteMembers.forEach((m) => map.set(m.id, m));
+          const list = Array.from(map.values()).filter((m) => m.status !== 'removed');
+          try {
+            localStorage.setItem(STORAGE_KEYS.TEAM_MEMBERS, JSON.stringify(list));
+          } catch {}
+          return list;
+        });
+      },
+      () => {
+        // Fallback cleanly to local team_members cache
+      }
+    );
+
+    return () => unsubscribe();
+  }, [adminUser?.uid]);
 
   // Keep selectedMovieForDetails synced if live Firestore data updates
   useEffect(() => {
@@ -973,7 +1264,25 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     showToast('Watch History cleared');
   };
 
+  const ensureTrialAllowsPlayback = (): boolean => {
+    if (activeTab === 'admin' && isAdminAuthenticated) return true;
+    if (!currentUser) {
+      showToast('Please sign up or log in to watch.');
+      return false;
+    }
+    if (currentUserTrialInfo?.isExpired) {
+      showToast('Your Free Trial Has Ended. Subscribe to continue watching.');
+      return false;
+    }
+    if (currentUser.status === 'suspended') {
+      showToast('Your account is currently suspended. Contact support.');
+      return false;
+    }
+    return true;
+  };
+
   const playMovie = (movie: Movie, vjTrackId?: string) => {
+    if (!ensureTrialAllowsPlayback()) return;
     if (offlineMode) {
       const isDownloaded = downloads.some((d) => d.movieId === movie.id && d.status === 'completed');
       if (!isDownloaded) {
@@ -1014,6 +1323,7 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
 
   const playTrailer = (movie: Movie) => {
+    if (!ensureTrialAllowsPlayback()) return;
     const trailerUrl = movie.trailerUrl || movie.videoUrl;
     const defaultTrack = movie.vjTracks?.find((t) => t.isDefault) || movie.vjTracks?.[0] || null;
     setSelectedVJTrack(defaultTrack);
@@ -1035,6 +1345,7 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
 
   const playEpisode = (show: TVShow, seasonNumber: number, episode: Episode, vjTrackId?: string) => {
+    if (!ensureTrialAllowsPlayback()) return;
     if (offlineMode) {
       const isDownloaded = downloads.some((d) => d.movieId === episode.id && d.status === 'completed');
       if (!isDownloaded) {
@@ -1082,6 +1393,7 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
 
   const resumeContinueWatching = (item: ContinueWatchingItem) => {
+    if (!ensureTrialAllowsPlayback()) return;
     if (offlineMode) {
       const isDownloaded = downloads.some((d) => d.movieId === item.itemId && d.status === 'completed');
       if (!isDownloaded) {
@@ -1312,24 +1624,43 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     return userRatings[movieId];
   };
 
-  // Firebase Admin Authentication (Isolated adminAuth instance)
+  // Firebase Admin & Poster Authentication (Isolated adminAuth instance + invited Poster fallback)
   const loginAdminWithEmail = async (
     email: string,
     password: string
   ): Promise<{ success: boolean; error?: string }> => {
+    const cleanEmail = email.trim().toLowerCase();
+    const invitedPoster = teamMembers.find(
+      (m) => m.status !== 'removed' && m.email.trim().toLowerCase() === cleanEmail && m.role === 'Poster'
+    );
+
     try {
-      await signInWithEmailAndPassword(adminAuth, email.trim(), password);
-      showToast('Admin signed in with Firebase Auth');
+      await signInWithEmailAndPassword(adminAuth, cleanEmail, password);
+      setPosterSessionEmail(null);
+      try {
+        localStorage.removeItem(STORAGE_KEYS.POSTER_SESSION);
+      } catch {}
+      showToast(invitedPoster ? `Signed in as Poster (${cleanEmail})` : 'Admin signed in with Firebase Auth');
       return { success: true };
     } catch (error: unknown) {
+      // Fallback for invited Poster accounts when Firebase Auth creation wasn't enabled or was created locally
+      if (invitedPoster && invitedPoster.password && invitedPoster.password === password) {
+        setPosterSessionEmail(cleanEmail);
+        try {
+          localStorage.setItem(STORAGE_KEYS.POSTER_SESSION, cleanEmail);
+        } catch {}
+        showToast(`Signed in as Poster (${cleanEmail})`);
+        return { success: true };
+      }
+
       const code = (error as { code?: string })?.code || '';
-      let message = 'Failed to sign in. Check your admin email and password.';
+      let message = 'Failed to sign in. Check your email and password.';
       if (
         code === 'auth/invalid-credential' ||
         code === 'auth/wrong-password' ||
         code === 'auth/user-not-found'
       ) {
-        message = 'Invalid admin email or password.';
+        message = 'Invalid email or password.';
       } else if (code === 'auth/too-many-requests') {
         message = 'Too many failed attempts. Please wait a moment and try again.';
       } else if (code === 'auth/invalid-email') {
@@ -1343,18 +1674,118 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
   const logoutAdmin = async () => {
     try {
-      await signOut(adminAuth);
-      showToast('Signed out of Admin');
+      if (adminAuth.currentUser) {
+        await signOut(adminAuth);
+      }
     } catch (error) {
       console.error('Admin sign out error:', error);
     }
+    setPosterSessionEmail(null);
+    try {
+      localStorage.removeItem(STORAGE_KEYS.POSTER_SESSION);
+    } catch {}
+    showToast('Signed out of Admin Portal');
   };
 
-  // Firestore Movie CRUD (Admin only, via adminDb/adminAuth)
+  // Team Members Management (Admin only)
+  const inviteTeamMember = async (
+    email: string,
+    password: string,
+    role: TeamRole = 'Poster'
+  ): Promise<{ success: boolean; error?: string }> => {
+    if (adminRole !== 'Admin') {
+      showToast('Only Admin can invite team members.');
+      return { success: false, error: 'Only Admin can invite team members.' };
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      return { success: false, error: 'Please enter a valid member email address.' };
+    }
+    if (!password || password.length < 6) {
+      return { success: false, error: 'Password must be at least 6 characters.' };
+    }
+    if (cleanEmail === staffEmail) {
+      return { success: false, error: 'You cannot invite your own Admin email as a Poster.' };
+    }
+
+    const existing = teamMembers.find(
+      (m) => m.status !== 'removed' && m.email.toLowerCase() === cleanEmail
+    );
+    if (existing) {
+      return { success: false, error: 'This email is already a team member.' };
+    }
+
+    // Create real Firebase Auth account on isolated inviteAuth so Admin remains signed in
+    try {
+      await createUserWithEmailAndPassword(inviteAuth, cleanEmail, password);
+      await signOut(inviteAuth).catch(() => {});
+    } catch (authErr: unknown) {
+      const code = (authErr as { code?: string })?.code || '';
+      if (code !== 'auth/email-already-in-use') {
+        console.warn('Secondary Firebase Auth invite notice:', code);
+      }
+    }
+
+    const memberId = `tm_${cleanEmail.replace(/[^a-z0-9]/g, '_')}`;
+    const newMember: TeamMember = {
+      id: memberId,
+      email: cleanEmail,
+      role,
+      password,
+      invitedBy: staffEmail || 'admin',
+      createdAt: Date.now(),
+      status: 'active',
+    };
+
+    try {
+      await setDoc(doc(adminDb, 'team_members', memberId), {
+        ...newMember,
+        createdAt: serverTimestamp(),
+      });
+    } catch (err) {
+      console.warn('Firestore team_members sync notice (saved locally):', err);
+    }
+
+    setTeamMembers((prev) => {
+      const next = [newMember, ...prev.filter((m) => m.id !== memberId)];
+      try {
+        localStorage.setItem(STORAGE_KEYS.TEAM_MEMBERS, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+
+    showToast(`Invite sent! ${cleanEmail} added as ${role}.`);
+    return { success: true };
+  };
+
+  const removeTeamMember = async (memberId: string) => {
+    if (adminRole !== 'Admin') {
+      showToast('Only Admin can remove team members.');
+      return;
+    }
+
+    try {
+      await deleteDoc(doc(adminDb, 'team_members', memberId));
+    } catch (err) {
+      console.warn('Firestore remove team_member notice:', err);
+    }
+
+    setTeamMembers((prev) => {
+      const next = prev.filter((m) => m.id !== memberId);
+      try {
+        localStorage.setItem(STORAGE_KEYS.TEAM_MEMBERS, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+    showToast('Team member removed');
+  };
+
+  // Firestore Movie CRUD (Admin & Poster, with ownership tracking & RBAC)
   const addMovie = async (movieData: Omit<Movie, 'id'>) => {
-    if (!adminAuth.currentUser) {
-      showToast('Admin sign-in required to add movies.');
-      throw new Error('Admin authentication required');
+    if (!isAdminAuthenticated) {
+      showToast('Staff sign-in required to add movies.');
+      throw new Error('Staff authentication required');
     }
 
     const descriptionText = (movieData.description || movieData.synopsis || '').trim();
@@ -1372,6 +1803,9 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
               commentaryQuotes: ['MovieKart UG Premiere!']
             }
           ];
+
+    const authorUid = adminAuth.currentUser?.uid || staffEmail || 'staff';
+    const authorEmail = staffEmail || adminAuth.currentUser?.email?.toLowerCase() || '';
 
     const payload = {
       title: movieData.title.trim(),
@@ -1398,11 +1832,12 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       vjTracks,
       viewsCount: 0,
       createdAt: serverTimestamp(),
-      createdBy: adminAuth.currentUser.uid,
+      createdBy: authorUid,
+      createdByEmail: authorEmail,
     };
 
     try {
-      await addDoc(collection(adminDb, 'movies'), payload);
+      await addDoc(collection(adminAuth.currentUser ? adminDb : db, 'movies'), payload);
       showToast(`Published "${payload.title}" live to MovieKart UG!`);
     } catch (error) {
       const info = buildFirestoreErrorInfo(error, OperationType.CREATE, 'movies');
@@ -1413,16 +1848,21 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
 
   const updateMovie = async (updatedMovie: Movie) => {
-    if (!adminAuth.currentUser) {
-      showToast('Admin sign-in required to update movies.');
-      throw new Error('Admin authentication required');
+    if (!isAdminAuthenticated) {
+      showToast('Staff sign-in required to update movies.');
+      throw new Error('Staff authentication required');
+    }
+
+    if (adminRole === 'Poster' && !isOwnedByCurrentStaff(updatedMovie)) {
+      showToast('Posters can only edit movies they posted.');
+      throw new Error('Permission denied');
     }
 
     const descriptionText = (updatedMovie.description || updatedMovie.synopsis || '').trim();
     const numericRating = Number(updatedMovie.rating) || 8.0;
 
     try {
-      await updateDoc(doc(adminDb, 'movies', updatedMovie.id), {
+      await updateDoc(doc(adminAuth.currentUser ? adminDb : db, 'movies', updatedMovie.id), {
         title: updatedMovie.title.trim(),
         description: descriptionText,
         synopsis: descriptionText,
@@ -1455,13 +1895,19 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
 
   const deleteMovie = async (movieId: string) => {
-    if (!adminAuth.currentUser) {
-      showToast('Admin sign-in required to delete movies.');
+    if (!isAdminAuthenticated) {
+      showToast('Staff sign-in required to delete movies.');
+      return;
+    }
+
+    const target = movies.find((m) => m.id === movieId);
+    if (adminRole === 'Poster' && (!target || !isOwnedByCurrentStaff(target))) {
+      showToast('Posters cannot delete Admin movies.');
       return;
     }
 
     try {
-      await deleteDoc(doc(adminDb, 'movies', movieId));
+      await deleteDoc(doc(adminAuth.currentUser ? adminDb : db, 'movies', movieId));
       showToast('Movie deleted from Firestore');
     } catch (error) {
       const info = buildFirestoreErrorInfo(error, OperationType.DELETE, `movies/${movieId}`);
@@ -1470,7 +1916,7 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }
   };
 
-  // Firestore TV Show CRUD (Admin only)
+  // Firestore TV Show CRUD (Admin & Poster with ownership checks)
   const addEpisodeToShow = async (params: {
     showTitle: string;
     posterUrl?: string;
@@ -1481,15 +1927,20 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     duration?: string;
     synopsis?: string;
   }) => {
-    if (!adminAuth.currentUser) {
-      showToast('Admin sign-in required to add TV episodes.');
-      throw new Error('Admin authentication required');
+    if (!isAdminAuthenticated) {
+      showToast('Staff sign-in required to add TV episodes.');
+      throw new Error('Staff authentication required');
     }
 
     const normalizedTitle = params.showTitle.trim();
     const existingShow = tvShows.find(
       (s) => s.title.toLowerCase() === normalizedTitle.toLowerCase()
     );
+
+    if (existingShow && adminRole === 'Poster' && !isOwnedByCurrentStaff(existingShow)) {
+      showToast('Posters can only edit TV Shows they posted.');
+      throw new Error('Permission denied');
+    }
 
     const newEp: Episode = {
       id: `ep_${Date.now()}_${params.episodeNumber}`,
@@ -1501,6 +1952,10 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       synopsis: params.synopsis || `Episode ${params.episodeNumber} of ${normalizedTitle}`,
       fileSizeMb: 240
     };
+
+    const targetDb = adminAuth.currentUser ? adminDb : db;
+    const authorUid = adminAuth.currentUser?.uid || staffEmail || 'staff';
+    const authorEmail = staffEmail || adminAuth.currentUser?.email?.toLowerCase() || '';
 
     try {
       if (existingShow) {
@@ -1529,7 +1984,7 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           updatedSeasons.sort((a, b) => a.seasonNumber - b.seasonNumber);
         }
 
-        await updateDoc(doc(adminDb, 'tvshows', existingShow.id), {
+        await updateDoc(doc(targetDb, 'tvshows', existingShow.id), {
           seasons: updatedSeasons
         });
         showToast(`Added Season ${params.seasonNumber} Ep ${params.episodeNumber} to "${existingShow.title}"`);
@@ -1565,9 +2020,10 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             }
           ],
           createdAt: serverTimestamp(),
-          createdBy: adminAuth.currentUser.uid,
+          createdBy: authorUid,
+          createdByEmail: authorEmail,
         };
-        await addDoc(collection(adminDb, 'tvshows'), newShowPayload);
+        await addDoc(collection(targetDb, 'tvshows'), newShowPayload);
         showToast(`Created TV Show "${normalizedTitle}" in Firestore`);
       }
     } catch (error) {
@@ -1579,12 +2035,17 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
 
   const deleteTVShow = async (showId: string) => {
-    if (!adminAuth.currentUser) {
-      showToast('Admin sign-in required.');
+    if (!isAdminAuthenticated) {
+      showToast('Staff sign-in required.');
+      return;
+    }
+    const target = tvShows.find((s) => s.id === showId);
+    if (adminRole === 'Poster' && (!target || !isOwnedByCurrentStaff(target))) {
+      showToast('Posters cannot delete Admin TV Shows.');
       return;
     }
     try {
-      await deleteDoc(doc(adminDb, 'tvshows', showId));
+      await deleteDoc(doc(adminAuth.currentUser ? adminDb : db, 'tvshows', showId));
       showToast('TV Show deleted from Firestore');
     } catch (error) {
       const info = buildFirestoreErrorInfo(error, OperationType.DELETE, `tvshows/${showId}`);
@@ -1595,6 +2056,7 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
   // Live TV Playback & Watching Now Counter
   const openLiveChannel = (channel: LiveTVChannel) => {
+    if (!ensureTrialAllowsPlayback()) return;
     setActiveLiveChannelId(channel.id);
     setLiveChannels((prev) => {
       const next = prev.map((c) =>
@@ -1635,7 +2097,7 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }
   };
 
-  // Admin CRUD: Add, Update, Delete Live TV Channels
+  // Admin & Poster CRUD: Add, Update, Delete Live TV Channels
   const addLiveChannel = async (channelData: {
     name: string;
     logoUrl: string;
@@ -1644,11 +2106,13 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     watchingNow?: number;
     isLive?: boolean;
   }) => {
-    if (!adminAuth.currentUser) {
-      showToast('Admin sign-in required to add Live TV channels.');
-      throw new Error('Admin authentication required');
+    if (!isAdminAuthenticated) {
+      showToast('Staff sign-in required to add Live TV channels.');
+      throw new Error('Staff authentication required');
     }
 
+    const authorUid = adminAuth.currentUser?.uid || staffEmail || 'staff';
+    const authorEmail = staffEmail || adminAuth.currentUser?.email?.toLowerCase() || '';
     const id = `live_${Date.now()}`;
     const newChannel: LiveTVChannel = {
       id,
@@ -1660,14 +2124,17 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       isLive: channelData.isLive !== false,
       order: liveChannels.length + 1,
       createdAt: Date.now(),
+      createdBy: authorUid,
+      createdByEmail: authorEmail,
     };
 
     try {
-      await setDoc(doc(adminDb, 'livetv', id), {
+      await setDoc(doc(adminAuth.currentUser ? adminDb : db, 'livetv', id), {
         ...newChannel,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
-        createdBy: adminAuth.currentUser.uid,
+        createdBy: authorUid,
+        createdByEmail: authorEmail,
       });
       setLiveChannels((prev) => {
         const next = [...prev.filter((c) => c.id !== id), newChannel];
@@ -1680,7 +2147,6 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     } catch (error) {
       const info = buildFirestoreErrorInfo(error, OperationType.CREATE, `livetv/${id}`);
       console.error('Firestore Add Live TV Error:', JSON.stringify(info));
-      // Still update local cache & inform admin
       setLiveChannels((prev) => {
         const next = [...prev, newChannel];
         try {
@@ -1693,9 +2159,13 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
 
   const updateLiveChannel = async (channel: LiveTVChannel) => {
-    if (!adminAuth.currentUser) {
-      showToast('Admin sign-in required to update Live TV channels.');
-      throw new Error('Admin authentication required');
+    if (!isAdminAuthenticated) {
+      showToast('Staff sign-in required to update Live TV channels.');
+      throw new Error('Staff authentication required');
+    }
+    if (adminRole === 'Poster' && !isOwnedByCurrentStaff(channel)) {
+      showToast('Posters can only edit Live TV channels they posted.');
+      throw new Error('Permission denied');
     }
 
     const updated: LiveTVChannel = {
@@ -1711,7 +2181,7 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
     try {
       await setDoc(
-        doc(adminDb, 'livetv', channel.id),
+        doc(adminAuth.currentUser ? adminDb : db, 'livetv', channel.id),
         {
           name: updated.name,
           logoUrl: updated.logoUrl,
@@ -1748,8 +2218,14 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
 
   const deleteLiveChannel = async (channelId: string) => {
-    if (!adminAuth.currentUser) {
-      showToast('Admin sign-in required to delete Live TV channels.');
+    if (!isAdminAuthenticated) {
+      showToast('Staff sign-in required to delete Live TV channels.');
+      return;
+    }
+
+    const target = liveChannels.find((c) => c.id === channelId);
+    if (adminRole === 'Poster' && (!target || !isOwnedByCurrentStaff(target))) {
+      showToast('Posters cannot delete Admin Live TV channels.');
       return;
     }
 
@@ -1757,12 +2233,12 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     try {
       if (isDefault) {
         await setDoc(
-          doc(adminDb, 'livetv', channelId),
+          doc(adminAuth.currentUser ? adminDb : db, 'livetv', channelId),
           { isDeleted: true, updatedAt: serverTimestamp() },
           { merge: true }
         );
       } else {
-        await deleteDoc(doc(adminDb, 'livetv', channelId));
+        await deleteDoc(doc(adminAuth.currentUser ? adminDb : db, 'livetv', channelId));
       }
     } catch (error) {
       console.warn('Firestore Delete Live TV error:', error);
@@ -1781,13 +2257,25 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     showToast('Live TV channel removed');
   };
 
-  // User account local management
+  // User account management (Admin only, synced to Firestore + localStorage)
   const addUser = (userData: Omit<UserAccount, 'id'>) => {
+    const now = Date.now();
+    const { trialStartDate, trialEndDate } = createInitialTrialDates(now);
     const newUser: UserAccount = {
       ...userData,
-      id: `u_${Date.now()}`
+      id: `u_${now}`,
+      createdAt: now,
+      trialStartDate: userData.trialStartDate || trialStartDate,
+      trialEndDate: userData.trialEndDate || trialEndDate,
+      trialStatus: userData.isPaid ? 'Paid' : userData.trialStatus || 'Free Trial',
+      isPaid: Boolean(userData.isPaid),
     };
     setUsers((prev) => [newUser, ...prev]);
+    setDoc(
+      doc(adminAuth.currentUser ? adminDb : db, 'users', newUser.id),
+      { ...newUser, createdAt: serverTimestamp(), updatedAt: serverTimestamp() },
+      { merge: true }
+    ).catch(() => {});
     showToast(`Created user account for ${newUser.name}`);
   };
 
@@ -1795,12 +2283,117 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     setUsers((prev) => prev.map((u) => (u.id === updatedUser.id ? updatedUser : u)));
     if (currentUser && currentUser.id === updatedUser.id) {
       setCurrentUser(updatedUser);
+      try {
+        localStorage.setItem(`moviekart_ug_user_${updatedUser.id}_profile`, JSON.stringify(updatedUser));
+      } catch {}
     }
+    setDoc(
+      doc(adminAuth.currentUser ? adminDb : db, 'users', updatedUser.id),
+      {
+        name: updatedUser.name,
+        email: updatedUser.email,
+        phone: updatedUser.phone,
+        subscription: updatedUser.subscription,
+        status: updatedUser.status,
+        momoProvider: updatedUser.momoProvider,
+        trialStartDate: updatedUser.trialStartDate || Date.now(),
+        trialEndDate: updatedUser.trialEndDate || Date.now() + TRIAL_DURATION_DAYS * MS_PER_DAY,
+        trialStatus: updatedUser.trialStatus || 'Free Trial',
+        isPaid: Boolean(updatedUser.isPaid),
+        paidAt: updatedUser.paidAt || null,
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    ).catch(() => {});
     showToast(`Updated user: ${updatedUser.name}`);
+  };
+
+  const setUserBillingStatus = async (userId: string, status: TrialStatus) => {
+    const target = users.find((u) => u.id === userId);
+    if (!target) return;
+    const now = Date.now();
+    let updated: UserAccount;
+    if (status === 'Paid') {
+      updated = {
+        ...target,
+        isPaid: true,
+        trialStatus: 'Paid',
+        paidAt: now,
+        subscription: target.subscription === 'Free Pass' ? 'MovieKart VIP' : target.subscription,
+        status: 'active',
+      };
+    } else if (status === 'Expired') {
+      updated = {
+        ...target,
+        isPaid: false,
+        trialStatus: 'Expired',
+        trialEndDate: now - MS_PER_DAY,
+        subscription: 'Free Pass',
+      };
+    } else {
+      const freshDates = createInitialTrialDates(now);
+      updated = {
+        ...target,
+        isPaid: false,
+        trialStatus: 'Free Trial',
+        trialStartDate: freshDates.trialStartDate,
+        trialEndDate: freshDates.trialEndDate,
+        subscription: 'Free Pass',
+        status: 'active',
+      };
+    }
+    updateUser(updated);
+  };
+
+  const subscribeCurrentUser = async (
+    plan: 'MovieKart VIP' | 'Standard HD',
+    momoProvider: 'MTN Mobile Money' | 'Airtel Money',
+    momoPhone?: string
+  ): Promise<{ success: boolean; error?: string }> => {
+    if (!currentUser) {
+      return { success: false, error: 'Please log in first.' };
+    }
+    const now = Date.now();
+    const upgraded: UserAccount = {
+      ...currentUser,
+      isPaid: true,
+      trialStatus: 'Paid',
+      paidAt: now,
+      subscription: plan,
+      momoProvider,
+      phone: momoPhone?.trim() ? momoPhone.trim() : currentUser.phone,
+      status: 'active',
+    };
+
+    setCurrentUser(upgraded);
+    setUsers((prev) => [upgraded, ...prev.filter((u) => u.id !== upgraded.id)]);
+    try {
+      localStorage.setItem(`moviekart_ug_user_${upgraded.id}_profile`, JSON.stringify(upgraded));
+    } catch {}
+
+    await setDoc(
+      doc(db, 'users', upgraded.id),
+      {
+        isPaid: true,
+        trialStatus: 'Paid',
+        paidAt: now,
+        subscription: plan,
+        momoProvider,
+        phone: upgraded.phone,
+        status: 'active',
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    ).catch(() => {});
+
+    setActiveTab('home');
+    showToast(`Subscribed to ${plan}! Full unlimited streaming unlocked.`);
+    return { success: true };
   };
 
   const deleteUser = (userId: string) => {
     setUsers((prev) => prev.filter((u) => u.id !== userId));
+    deleteDoc(doc(adminAuth.currentUser ? adminDb : db, 'users', userId)).catch(() => {});
     showToast('User account deleted');
   };
 
@@ -1822,6 +2415,57 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       .replace(/_+/g, '_')
       .replace(/^_|_$/g, '');
     return base || 'moviefan';
+  };
+
+  // Local credential store helper (fallback for phone/offline accounts)
+  const readLocalPasswords = (): Record<string, string> => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.USER_PASSWORDS);
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  };
+
+  const saveLocalPassword = (identifier: string, password: string) => {
+    try {
+      const map = readLocalPasswords();
+      map[identifier.trim().toLowerCase()] = password;
+      localStorage.setItem(STORAGE_KEYS.USER_PASSWORDS, JSON.stringify(map));
+    } catch {}
+  };
+
+  const normalizeEmailOrPhone = (rawInput: string) => {
+    const trimmed = rawInput.trim();
+    const isEmail = trimmed.includes('@');
+    if (isEmail) {
+      const cleanEmail = trimmed.toLowerCase();
+      return {
+        isEmail: true,
+        cleanEmail,
+        firebaseEmail: cleanEmail,
+        phoneDigits: '',
+        formattedPhone: '',
+        lookupKey: cleanEmail,
+      };
+    }
+    let digits = trimmed.replace(/\D/g, '');
+    if (digits.startsWith('0') && digits.length >= 9) {
+      digits = `256${digits.slice(1)}`;
+    } else if (digits.length === 9 && digits.startsWith('7')) {
+      digits = `256${digits}`;
+    }
+    const formattedPhone = digits.startsWith('256')
+      ? `+256 ${digits.slice(3, 6)} ${digits.slice(6, 9)} ${digits.slice(9)}`.trim()
+      : `+${digits}`;
+    return {
+      isEmail: false,
+      cleanEmail: '',
+      firebaseEmail: `u${digits}@phone.moviekart.ug`,
+      phoneDigits: digits,
+      formattedPhone,
+      lookupKey: `phone:${digits}`,
+    };
   };
 
   // Hydrate Viewer Session from Firebase Auth user + Firestore users/{uid} + localStorage
@@ -1848,11 +2492,22 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       fbUser.email?.split('@')[0] ||
       'MovieKart Viewer';
 
-    const baseEmail = fbUser.email || localProfile.email || '';
+    const rawFbEmail = fbUser.email || localProfile.email || '';
+    const isSyntheticPhoneEmail = rawFbEmail.endsWith('@phone.moviekart.ug');
+    const baseEmail =
+      (typeof remoteData?.email === 'string' && remoteData.email) ||
+      (isSyntheticPhoneEmail ? '' : rawFbEmail);
+
+    const basePhone =
+      (typeof remoteData?.phone === 'string' && remoteData.phone) ||
+      localProfile.phone ||
+      fbUser.phoneNumber ||
+      '';
+
     const baseUsername =
       (typeof remoteData?.username === 'string' && remoteData.username) ||
       localProfile.username ||
-      deriveUsername(baseName, baseEmail);
+      deriveUsername(baseName, baseEmail || basePhone);
 
     const baseAvatar =
       (typeof remoteData?.avatar === 'string' && remoteData.avatar) ||
@@ -1860,16 +2515,38 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       fbUser.photoURL ||
       '/pwa-192x192.png';
 
+    const creationMs =
+      parseTimestampMs(remoteData?.trialStartDate) ||
+      parseTimestampMs(remoteData?.createdAt) ||
+      localProfile.trialStartDate ||
+      localProfile.createdAt ||
+      (fbUser.metadata?.creationTime ? Date.parse(fbUser.metadata.creationTime) : Date.now()) ||
+      Date.now();
+
+    const defaultTrial = createInitialTrialDates(creationMs);
+    const trialStartDate =
+      parseTimestampMs(remoteData?.trialStartDate) ||
+      localProfile.trialStartDate ||
+      defaultTrial.trialStartDate;
+    const trialEndDate =
+      parseTimestampMs(remoteData?.trialEndDate) ||
+      localProfile.trialEndDate ||
+      defaultTrial.trialEndDate;
+
+    const isPaid =
+      remoteData?.isPaid === true ||
+      remoteData?.trialStatus === 'Paid' ||
+      localProfile.isPaid === true ||
+      localProfile.trialStatus === 'Paid';
+
     const joinedDate =
       (typeof remoteData?.joinedDate === 'string' && remoteData.joinedDate !== 'Just now' && remoteData.joinedDate) ||
       (localProfile.joinedDate && localProfile.joinedDate !== 'Just now' ? localProfile.joinedDate : '') ||
-      (fbUser.metadata?.creationTime
-        ? new Date(fbUser.metadata.creationTime).toLocaleDateString('en-US', {
-            month: 'short',
-            day: 'numeric',
-            year: 'numeric',
-          })
-        : formatJoinDate());
+      new Date(creationMs).toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      });
 
     const remoteWatchlist = Array.isArray(remoteData?.watchlist)
       ? (remoteData!.watchlist as string[])
@@ -1883,20 +2560,37 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       name: baseName,
       username: baseUsername,
       email: baseEmail,
-      phone:
-        (typeof remoteData?.phone === 'string' && remoteData.phone) ||
-        localProfile.phone ||
-        fbUser.phoneNumber ||
-        '',
+      phone: basePhone,
       avatar: baseAvatar,
       authProvider:
         fbUser.providerData?.some((p) => p.providerId === 'google.com')
           ? 'google'
-          : 'email',
-      subscription: localProfile.subscription || 'MovieKart VIP',
-      status: 'active',
+          : isSyntheticPhoneEmail
+            ? 'phone'
+            : 'email',
+      subscription:
+        (typeof remoteData?.subscription === 'string'
+          ? (remoteData.subscription as UserAccount['subscription'])
+          : localProfile.subscription) || (isPaid ? 'MovieKart VIP' : 'Free Pass'),
+      status:
+        remoteData?.status === 'suspended' || localProfile.status === 'suspended'
+          ? 'suspended'
+          : 'active',
       joinedDate,
-      momoProvider: localProfile.momoProvider || 'MTN Mobile Money',
+      createdAt: creationMs,
+      trialStartDate,
+      trialEndDate,
+      trialStatus: isPaid
+        ? 'Paid'
+        : Date.now() >= trialEndDate
+          ? 'Expired'
+          : 'Free Trial',
+      isPaid,
+      paidAt: parseTimestampMs(remoteData?.paidAt) || localProfile.paidAt,
+      momoProvider:
+        (typeof remoteData?.momoProvider === 'string'
+          ? (remoteData.momoProvider as UserAccount['momoProvider'])
+          : localProfile.momoProvider) || 'MTN Mobile Money',
       storageUsedMb: localProfile.storageUsedMb || 0,
       downloadsCount: localProfile.downloadsCount || 0,
       moviesWatchedCount:
@@ -1911,6 +2605,7 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       return [hydratedUser, ...others];
     });
     setCurrentUser(hydratedUser);
+    markHasSignedUp();
 
     try {
       localStorage.setItem(STORAGE_KEYS.CURRENT_USER_ID, hydratedUser.id);
@@ -1937,8 +2632,8 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       if (localCW) setContinueWatchingList(JSON.parse(localCW));
     } catch {}
 
-    // Ensure initial user profile record exists in Firestore
-    if (!remoteData) {
+    // Ensure initial user profile + 30-day free trial record exists in Firestore
+    if (!remoteData || !remoteData.trialStartDate || !remoteData.trialEndDate) {
       setDoc(
         doc(db, 'users', hydratedUser.id),
         {
@@ -1949,9 +2644,16 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           phone: hydratedUser.phone,
           avatar: hydratedUser.avatar,
           authProvider: hydratedUser.authProvider,
+          subscription: hydratedUser.subscription,
+          status: hydratedUser.status,
           joinedDate: hydratedUser.joinedDate,
+          createdAt: hydratedUser.createdAt,
+          trialStartDate: hydratedUser.trialStartDate,
+          trialEndDate: hydratedUser.trialEndDate,
+          trialStatus: hydratedUser.trialStatus,
+          isPaid: hydratedUser.isPaid,
+          momoProvider: hydratedUser.momoProvider,
           moviesWatchedCount: hydratedUser.moviesWatchedCount || 0,
-          createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         },
         { merge: true }
@@ -1965,6 +2667,7 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const activateUserSession = (user: UserAccount) => {
     setCurrentUser(user);
     setUsers((prev) => [user, ...prev.filter((u) => u.id !== user.id)]);
+    markHasSignedUp();
     try {
       localStorage.setItem(STORAGE_KEYS.CURRENT_USER_ID, user.id);
       localStorage.setItem(`moviekart_ug_user_${user.id}_profile`, JSON.stringify(user));
@@ -2017,6 +2720,8 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }
 
     setCurrentUser(null);
+    setCurrentlyPlayingItem(null);
+    setActiveLiveChannelId(null);
     setWatchlist([]);
     setWatchHistory([]);
     setDownloads([]);
@@ -2024,7 +2729,8 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     try {
       localStorage.removeItem(STORAGE_KEYS.CURRENT_USER_ID);
     } catch {}
-    setActiveTab('profile');
+    markHasSignedUp();
+    setActiveTab('home');
     showToast('Logged out of MovieKart UG');
   };
 
@@ -2107,6 +2813,230 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }
   };
 
+  // Unified Forced-Gate Sign Up (Full Name + Email or Phone + Password) with automatic 30-Day Free Trial
+  const signUpWithEmailOrPhone = async (
+    fullName: string,
+    emailOrPhone: string,
+    password: string
+  ): Promise<{ success: boolean; error?: string }> => {
+    const cleanName = fullName.trim();
+    if (!cleanName || cleanName.length < 2) {
+      return { success: false, error: 'Please enter your Full Name.' };
+    }
+    if (!emailOrPhone.trim()) {
+      return { success: false, error: 'Please enter your Email or Phone number.' };
+    }
+    if (!password || password.length < 6) {
+      return { success: false, error: 'Password must be at least 6 characters.' };
+    }
+
+    const parsed = normalizeEmailOrPhone(emailOrPhone);
+    if (!parsed.isEmail && parsed.phoneDigits.length < 8) {
+      return {
+        success: false,
+        error: 'Enter a valid email address or phone number (e.g. +256 772 123 456).',
+      };
+    }
+
+    // Prevent duplicate signup in current users list
+    const duplicate = users.find((u) => {
+      if (parsed.isEmail) {
+        return u.email && u.email.trim().toLowerCase() === parsed.cleanEmail;
+      }
+      const existingDigits = (u.phone || '').replace(/\D/g, '');
+      return existingDigits && existingDigits === parsed.phoneDigits;
+    });
+    if (duplicate) {
+      return {
+        success: false,
+        error: 'An account with this Email/Phone already exists. Please click Login.',
+      };
+    }
+
+    const now = Date.now();
+    const trialDates = createInitialTrialDates(now);
+    const joinedDate = formatJoinDate();
+
+    try {
+      const cred = await createUserWithEmailAndPassword(auth, parsed.firebaseEmail, password);
+      await updateProfile(cred.user, { displayName: cleanName }).catch(() => {});
+
+      const newUser: UserAccount = {
+        id: cred.user.uid,
+        name: cleanName,
+        username: deriveUsername(cleanName, parsed.cleanEmail || parsed.formattedPhone),
+        email: parsed.isEmail ? parsed.cleanEmail : '',
+        phone: parsed.isEmail ? '' : parsed.formattedPhone,
+        avatar: '/pwa-192x192.png',
+        authProvider: parsed.isEmail ? 'email' : 'phone',
+        subscription: 'Free Pass',
+        status: 'active',
+        joinedDate,
+        createdAt: now,
+        trialStartDate: trialDates.trialStartDate,
+        trialEndDate: trialDates.trialEndDate,
+        trialStatus: 'Free Trial',
+        isPaid: false,
+        momoProvider: 'MTN Mobile Money',
+        storageUsedMb: 0,
+        downloadsCount: 0,
+        moviesWatchedCount: 0,
+      };
+
+      saveLocalPassword(parsed.lookupKey, password);
+      if (parsed.isEmail) saveLocalPassword(parsed.cleanEmail, password);
+
+      await setDoc(
+        doc(db, 'users', newUser.id),
+        {
+          ...newUser,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      ).catch(() => {});
+
+      activateUserSession(newUser);
+      setActiveTab('home');
+      showToast(`Welcome, ${newUser.name}! Your 30-day Free Trial is now active.`);
+      return { success: true };
+    } catch (error: unknown) {
+      const code = (error as { code?: string })?.code || '';
+      if (code === 'auth/email-already-in-use') {
+        return {
+          success: false,
+          error: 'An account with this Email/Phone already exists. Please switch to Login.',
+        };
+      }
+      if (code === 'auth/weak-password') {
+        return { success: false, error: 'Password must be at least 6 characters.' };
+      }
+      if (code === 'auth/invalid-email') {
+        return { success: false, error: 'Please enter a valid Email or Phone number.' };
+      }
+
+      // Fallback: Save directly to Firestore + localStorage if Firebase Auth is unavailable
+      const fallbackId = parsed.isEmail
+        ? `user_${now}_${Math.random().toString(36).slice(2, 7)}`
+        : `phone_${parsed.phoneDigits}`;
+      const fallbackUser: UserAccount = {
+        id: fallbackId,
+        name: cleanName,
+        username: deriveUsername(cleanName, parsed.cleanEmail || parsed.formattedPhone),
+        email: parsed.isEmail ? parsed.cleanEmail : '',
+        phone: parsed.isEmail ? '' : parsed.formattedPhone,
+        avatar: '/pwa-192x192.png',
+        authProvider: parsed.isEmail ? 'email' : 'phone',
+        subscription: 'Free Pass',
+        status: 'active',
+        joinedDate,
+        createdAt: now,
+        trialStartDate: trialDates.trialStartDate,
+        trialEndDate: trialDates.trialEndDate,
+        trialStatus: 'Free Trial',
+        isPaid: false,
+        momoProvider: 'MTN Mobile Money',
+        storageUsedMb: 0,
+        downloadsCount: 0,
+        moviesWatchedCount: 0,
+      };
+
+      saveLocalPassword(parsed.lookupKey, password);
+      if (parsed.isEmail) saveLocalPassword(parsed.cleanEmail, password);
+
+      await setDoc(
+        doc(db, 'users', fallbackUser.id),
+        {
+          ...fallbackUser,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      ).catch(() => {});
+
+      activateUserSession(fallbackUser);
+      setActiveTab('home');
+      showToast(`Welcome, ${fallbackUser.name}! Your 30-day Free Trial is now active.`);
+      return { success: true };
+    }
+  };
+
+  // Unified Forced-Gate Login (Email or Phone + Password)
+  const loginWithEmailOrPhone = async (
+    emailOrPhone: string,
+    password: string
+  ): Promise<{ success: boolean; error?: string }> => {
+    if (!emailOrPhone.trim()) {
+      return { success: false, error: 'Please enter your Email or Phone number.' };
+    }
+    if (!password) {
+      return { success: false, error: 'Please enter your password.' };
+    }
+
+    const parsed = normalizeEmailOrPhone(emailOrPhone);
+    if (!parsed.isEmail && parsed.phoneDigits.length < 8) {
+      return { success: false, error: 'Please enter a valid Email or Phone number.' };
+    }
+
+    try {
+      const cred = await signInWithEmailAndPassword(auth, parsed.firebaseEmail, password);
+      const user = await hydrateViewerFromFirebase(cred.user);
+      if (user.status === 'suspended') {
+        await signOut(auth).catch(() => {});
+        setCurrentUser(null);
+        return {
+          success: false,
+          error: 'This account has been suspended. Contact MovieKart UG support on WhatsApp.',
+        };
+      }
+      saveLocalPassword(parsed.lookupKey, password);
+      setActiveTab('home');
+      showToast(`Welcome back, ${user.name}!`);
+      return { success: true };
+    } catch (error: unknown) {
+      // Fallback: check local/Firestore users list with saved local password
+      const passwordMap = readLocalPasswords();
+      const expectedPassword =
+        passwordMap[parsed.lookupKey] ||
+        (parsed.isEmail ? passwordMap[parsed.cleanEmail] : undefined);
+
+      const matchedUser = users.find((u) => {
+        if (parsed.isEmail) {
+          return u.email && u.email.trim().toLowerCase() === parsed.cleanEmail;
+        }
+        const existingDigits = (u.phone || '').replace(/\D/g, '');
+        return existingDigits && existingDigits === parsed.phoneDigits;
+      });
+
+      if (matchedUser && expectedPassword && expectedPassword === password) {
+        if (matchedUser.status === 'suspended') {
+          return {
+            success: false,
+            error: 'This account has been suspended. Contact MovieKart UG support on WhatsApp.',
+          };
+        }
+        activateUserSession(matchedUser);
+        setActiveTab('home');
+        showToast(`Welcome back, ${matchedUser.name}!`);
+        return { success: true };
+      }
+
+      const code = (error as { code?: string })?.code || '';
+      if (
+        code === 'auth/invalid-credential' ||
+        code === 'auth/wrong-password' ||
+        code === 'auth/user-not-found'
+      ) {
+        return { success: false, error: 'Invalid Email/Phone or password.' };
+      }
+      if (code === 'auth/too-many-requests') {
+        return { success: false, error: 'Too many failed login attempts. Try again shortly.' };
+      }
+      return {
+        success: false,
+        error: 'Invalid Email/Phone or password. If you are new, click Create Account.',
+      };
+    }
+  };
+
   // Real Google Sign-In via Firebase GoogleAuthProvider
   const signUpWithGoogle = async (): Promise<{ success: boolean; error?: string }> => {
     try {
@@ -2114,20 +3044,20 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       provider.setCustomParameters({ prompt: 'select_account' });
       const result = await signInWithPopup(auth, provider);
       const user = await hydrateViewerFromFirebase(result.user);
-      setActiveTab('profile');
+      setActiveTab('home');
       showToast(`Welcome, ${user.name}!`);
       return { success: true };
     } catch (error: unknown) {
       const code = (error as { code?: string })?.code || '';
-      let message = 'Google Sign-In failed. Please try Email & Password.';
+      let message = 'Google Sign-In failed. Please try Email/Phone & Password.';
       if (code === 'auth/popup-closed-by-user') {
         message = 'Google sign-in popup was closed before completing.';
       } else if (code === 'auth/popup-blocked') {
-        message = 'Popup blocked by browser. Allow popups or use Email & Password.';
+        message = 'Popup blocked by browser. Allow popups or use Email/Phone & Password.';
       } else if (code === 'auth/operation-not-allowed') {
-        message = 'Google Sign-In is not enabled in Firebase Auth Console yet. Please use Email & Password.';
+        message = 'Google Sign-In is not enabled in Firebase Auth Console yet. Please use Email/Phone & Password.';
       } else if (code === 'auth/unauthorized-domain') {
-        message = 'This domain is not authorized in Firebase Auth settings yet. Use Email & Password or authorize the domain.';
+        message = 'This domain is not authorized in Firebase Auth settings yet. Use Email/Phone & Password.';
       } else if (error instanceof Error && error.message) {
         message = error.message;
       }
@@ -2135,7 +3065,7 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }
   };
 
-  // Phone Sign-Up / Sign-In backed by Firestore + localStorage
+  // Phone Sign-Up / Sign-In backed by Firestore + localStorage with 30-day free trial
   const signUpWithPhone = async (
     phoneNumber: string,
     name: string,
@@ -2156,6 +3086,12 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         const snap = await getDoc(doc(db, 'users', docId));
         if (snap.exists()) {
           const data = snap.data() as Record<string, unknown>;
+          const createdMs =
+            parseTimestampMs(data.trialStartDate) ||
+            parseTimestampMs(data.createdAt) ||
+            Date.now();
+          const trialDates = createInitialTrialDates(createdMs);
+          const isPaid = data.isPaid === true || data.trialStatus === 'Paid';
           existingUser = {
             id: docId,
             name: typeof data.name === 'string' ? data.name : displayName,
@@ -2163,14 +3099,19 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
               typeof data.username === 'string'
                 ? data.username
                 : deriveUsername(displayName, ''),
-            email: typeof data.email === 'string' ? data.email : `${cleanDigits.slice(-6)}@moviekart.ug`,
+            email: typeof data.email === 'string' ? data.email : '',
             phone: formattedPhone,
             avatar: typeof data.avatar === 'string' ? data.avatar : '/pwa-192x192.png',
             authProvider: 'phone',
-            subscription: 'MovieKart VIP',
-            status: 'active',
+            subscription: isPaid ? 'MovieKart VIP' : 'Free Pass',
+            status: data.status === 'suspended' ? 'suspended' : 'active',
             joinedDate:
               typeof data.joinedDate === 'string' ? data.joinedDate : formatJoinDate(),
+            createdAt: createdMs,
+            trialStartDate: parseTimestampMs(data.trialStartDate) || trialDates.trialStartDate,
+            trialEndDate: parseTimestampMs(data.trialEndDate) || trialDates.trialEndDate,
+            trialStatus: isPaid ? 'Paid' : 'Free Trial',
+            isPaid,
             momoProvider,
             storageUsedMb: 0,
             downloadsCount: 0,
@@ -2188,17 +3129,24 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }
 
     if (!existingUser) {
+      const now = Date.now();
+      const trialDates = createInitialTrialDates(now);
       existingUser = {
         id: docId,
         name: displayName,
         username: deriveUsername(displayName, ''),
-        email: `${cleanDigits.slice(-6)}@moviekart.ug`,
+        email: '',
         phone: formattedPhone,
         avatar: '/pwa-192x192.png',
         authProvider: 'phone',
-        subscription: 'MovieKart VIP',
+        subscription: 'Free Pass',
         status: 'active',
         joinedDate: formatJoinDate(),
+        createdAt: now,
+        trialStartDate: trialDates.trialStartDate,
+        trialEndDate: trialDates.trialEndDate,
+        trialStatus: 'Free Trial',
+        isPaid: false,
         momoProvider,
         storageUsedMb: 0,
         downloadsCount: 0,
@@ -2208,7 +3156,6 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         doc(db, 'users', docId),
         {
           ...existingUser,
-          createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         },
         { merge: true }
@@ -2216,8 +3163,8 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }
 
     activateUserSession(existingUser);
-    setActiveTab('profile');
-    showToast(`Signed in with ${momoProvider}! Welcome, ${existingUser.name}`);
+    setActiveTab('home');
+    showToast(`Welcome, ${existingUser.name}! Your 30-day Free Trial is active.`);
     return { success: true };
   };
 
@@ -2243,16 +3190,17 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       await updateProfile(cred.user, { displayName });
       const user = await hydrateViewerFromFirebase(cred.user, displayName);
       const updatedWithMomo = { ...user, momoProvider };
+      saveLocalPassword(cleanEmail, password);
       setCurrentUser(updatedWithMomo);
       localStorage.setItem(`moviekart_ug_user_${user.id}_profile`, JSON.stringify(updatedWithMomo));
       setDoc(doc(db, 'users', user.id), { momoProvider }, { merge: true }).catch(() => {});
-      setActiveTab('profile');
-      showToast(`Account created for ${user.name}!`);
+      setActiveTab('home');
+      showToast(`Account created for ${user.name}! 30-Day Free Trial started.`);
       return { success: true };
     } catch (error: unknown) {
       const code = (error as { code?: string })?.code || '';
       if (code === 'auth/email-already-in-use') {
-        return { success: false, error: 'An account with this email already exists. Please switch to Sign In.' };
+        return { success: false, error: 'An account with this email already exists. Please switch to Login.' };
       }
       if (code === 'auth/weak-password') {
         return { success: false, error: 'Password must be at least 6 characters.' };
@@ -2272,37 +3220,7 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     email: string,
     password: string
   ): Promise<{ success: boolean; error?: string }> => {
-    const cleanEmail = email.trim().toLowerCase();
-    if (!cleanEmail) {
-      return { success: false, error: 'Please enter your email address.' };
-    }
-    if (!password) {
-      return { success: false, error: 'Please enter your password.' };
-    }
-
-    try {
-      const cred = await signInWithEmailAndPassword(auth, cleanEmail, password);
-      const user = await hydrateViewerFromFirebase(cred.user);
-      setActiveTab('profile');
-      showToast(`Welcome back, ${user.name}!`);
-      return { success: true };
-    } catch (error: unknown) {
-      const code = (error as { code?: string })?.code || '';
-      if (
-        code === 'auth/invalid-credential' ||
-        code === 'auth/wrong-password' ||
-        code === 'auth/user-not-found'
-      ) {
-        return { success: false, error: 'Invalid email or password.' };
-      }
-      if (code === 'auth/too-many-requests') {
-        return { success: false, error: 'Too many failed login attempts. Try again shortly.' };
-      }
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to sign in.',
-      };
-    }
+    return loginWithEmailOrPhone(email, password);
   };
 
   return (
@@ -2319,6 +3237,8 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         activeLiveChannel,
         users,
         currentUser,
+        currentUserTrialInfo,
+        hasSignedUpBefore,
         isAuthenticated,
         watchlist,
         downloads,
@@ -2336,6 +3256,9 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         adminUser,
         adminAuthLoading,
         isAdminAuthenticated,
+        adminRole,
+        staffEmail,
+        teamMembers,
         toastMessage,
         setActiveTab,
         setSelectedGenre,
@@ -2367,15 +3290,22 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         getUserRating,
         setOfflineMode,
         setCurrentUser,
+        signUpWithEmailOrPhone,
+        loginWithEmailOrPhone,
         signUpWithGoogle,
         signUpWithPhone,
         signUpWithEmail,
         signInWithEmail,
         updateUserProfile,
+        subscribeCurrentUser,
+        setUserBillingStatus,
         logoutUser,
         switchUserAccount,
         loginAdminWithEmail,
         logoutAdmin,
+        inviteTeamMember,
+        removeTeamMember,
+        isOwnedByCurrentStaff,
         addMovie,
         updateMovie,
         deleteMovie,

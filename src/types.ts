@@ -38,6 +38,20 @@ export type VJFilter = (typeof VJ_FILTER_OPTIONS)[number];
 
 export type ContentMode = 'movies' | 'tvshows' | 'livetv';
 
+export type TrialStatus = 'Free Trial' | 'Paid' | 'Expired';
+
+export type TeamRole = 'Admin' | 'Poster';
+
+export interface TeamMember {
+  id: string;
+  email: string;
+  role: TeamRole;
+  password?: string;
+  invitedBy?: string;
+  createdAt?: number;
+  status?: 'active' | 'removed';
+}
+
 export interface LiveTVChannel {
   id: string;
   name: string;
@@ -50,6 +64,8 @@ export interface LiveTVChannel {
   order?: number;
   createdAt?: number;
   updatedAt?: number;
+  createdBy?: string;
+  createdByEmail?: string;
 }
 
 export interface VJTrack {
@@ -88,6 +104,8 @@ export interface Movie {
   ratingsCount?: number; // total ratings submitted
   userRating?: number; // rating submitted by current user (1 - 5)
   createdAt?: number;
+  createdBy?: string;
+  createdByEmail?: string;
 }
 
 export interface Episode {
@@ -130,6 +148,8 @@ export interface TVShow {
   rating5?: number;
   ratingsCount?: number;
   userRating?: number;
+  createdBy?: string;
+  createdByEmail?: string;
 }
 
 export interface PlayableItem {
@@ -216,6 +236,12 @@ export interface UserAccount {
   subscription: 'MovieKart VIP' | 'Standard HD' | 'Free Pass';
   status: 'active' | 'suspended';
   joinedDate: string;
+  createdAt?: number;
+  trialStartDate?: number;
+  trialEndDate?: number;
+  trialStatus?: TrialStatus;
+  isPaid?: boolean;
+  paidAt?: number;
   momoProvider: 'MTN Mobile Money' | 'Airtel Money';
   storageUsedMb: number;
   downloadsCount: number;

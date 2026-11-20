@@ -17,6 +17,9 @@ const app = getApps().some((a) => a.name === '[DEFAULT]') ? getApp() : initializ
 const adminApp = getApps().some((a) => a.name === 'admin')
   ? getApp('admin')
   : initializeApp(firebaseConfig, 'admin');
+const inviteApp = getApps().some((a) => a.name === 'invite')
+  ? getApp('invite')
+  : initializeApp(firebaseConfig, 'invite');
 
 // Viewer Firebase instances
 export const auth = getAuth(app);
@@ -27,6 +30,9 @@ export const storage = getStorage(app);
 export const adminAuth = getAuth(adminApp);
 export const adminDb = getFirestore(adminApp);
 export const adminStorage = getStorage(adminApp);
+
+// Isolated secondary Auth instance for inviting Poster accounts without signing Admin out
+export const inviteAuth = getAuth(inviteApp);
 
 export enum OperationType {
   CREATE = 'create',

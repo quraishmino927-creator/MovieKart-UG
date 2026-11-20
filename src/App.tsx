@@ -19,6 +19,8 @@ import { AdminDashboard } from './components/AdminDashboard';
 import { BottomNavBar } from './components/BottomNavBar';
 import { OfflineIndicator } from './components/PWAInstallButton';
 import { WhatsAppSupportButton } from './components/WhatsAppSupportButton';
+import { TrialBanner } from './components/TrialBanner';
+import { TrialExpiredPaywall } from './components/TrialExpiredPaywall';
 import { WifiOff, Film, Loader2, AlertCircle } from 'lucide-react';
 import { Movie, NAMED_VJS, VJFilter } from './types';
 
@@ -49,6 +51,7 @@ function movieMatchesSelectedVJ(movie: Movie, selectedVJ: VJFilter): boolean {
 const MainContent: React.FC = () => {
   const {
     currentUser,
+    currentUserTrialInfo,
     contentMode,
     activeTab,
     selectedGenre,
@@ -63,6 +66,7 @@ const MainContent: React.FC = () => {
   } = useMovieContext();
 
   const [filterVJOnly, setFilterVJOnly] = useState(false);
+  const [showSubscribePage, setShowSubscribePage] = useState(false);
 
   // Admin route (/admin): only accessible by typing /admin at the end of the URL
   if (activeTab === 'admin') {
@@ -82,6 +86,43 @@ const MainContent: React.FC = () => {
         )}
         <VideoPlayerModal />
       </div>
+    );
+  }
+
+  // 1. FORCE SIGN UP / LOGIN GATE: Block ALL movies, TV shows & Live TV until signed in
+  if (!currentUser) {
+    return (
+      <>
+        <AuthScreen isForcedGate={true} />
+        {toastMessage && (
+          <div className="fixed top-6 right-4 sm:right-8 z-50">
+            <div className="bg-[#181824] border border-red-500/50 text-white px-4 py-2.5 rounded-2xl shadow-2xl flex items-center gap-2.5 text-xs sm:text-sm font-semibold backdrop-blur-md">
+              <span className="w-2 h-2 rounded-full bg-red-500 animate-ping" />
+              <span>{toastMessage}</span>
+            </div>
+          </div>
+        )}
+      </>
+    );
+  }
+
+  // 2. 30-DAY FREE TRIAL EXPIRY PAYWALL (or voluntary Subscribe upgrade screen)
+  if (currentUserTrialInfo?.isExpired || showSubscribePage) {
+    return (
+      <>
+        <TrialExpiredPaywall
+          allowClose={!currentUserTrialInfo?.isExpired}
+          onClose={() => setShowSubscribePage(false)}
+        />
+        {toastMessage && (
+          <div className="fixed top-6 right-4 sm:right-8 z-50">
+            <div className="bg-[#181824] border border-red-500/50 text-white px-4 py-2.5 rounded-2xl shadow-2xl flex items-center gap-2.5 text-xs sm:text-sm font-semibold backdrop-blur-md">
+              <span className="w-2 h-2 rounded-full bg-red-500 animate-ping" />
+              <span>{toastMessage}</span>
+            </div>
+          </div>
+        )}
+      </>
     );
   }
 
@@ -121,6 +162,9 @@ const MainContent: React.FC = () => {
     <div className="min-h-screen bg-[#070709] text-gray-100 flex flex-col font-['Plus_Jakarta_Sans'] pb-24">
       {/* Top Header with Movies / TV Shows Toggle */}
       <Header />
+
+      {/* 30 Days Free Trial Countdown Box */}
+      <TrialBanner onSubscribeClick={() => setShowSubscribePage(true)} />
 
       {/* Offline Mode Banner */}
       {offlineMode && (
