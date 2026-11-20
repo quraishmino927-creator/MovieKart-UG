@@ -20,12 +20,23 @@ export const MovieGrid: React.FC<MovieGridProps> = ({
 }) => {
   if (movies.length === 0) {
     return (
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16 text-center">
-        <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-white/5 flex items-center justify-center text-gray-500">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16 text-center space-y-4">
+        <div className="w-16 h-16 mx-auto rounded-full bg-white/5 flex items-center justify-center text-gray-500">
           <Film className="w-8 h-8" />
         </div>
-        <h3 className="text-lg font-bold text-white mb-2">No Movies Found</h3>
-        <p className="text-sm text-gray-400 max-w-md mx-auto">{emptyMessage}</p>
+        <div>
+          <h3 className="text-lg font-bold text-white mb-2">No Movies Found</h3>
+          <p className="text-sm text-gray-400 max-w-md mx-auto">{emptyMessage}</p>
+        </div>
+        {onExploreAll && (
+          <button
+            type="button"
+            onClick={onExploreAll}
+            className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-xl bg-[#E50914] hover:bg-red-700 text-white text-xs font-bold shadow-md shadow-red-600/25 transition-colors cursor-pointer"
+          >
+            <span>Show All Movies</span>
+          </button>
+        )}
       </div>
     );
   }

@@ -8,6 +8,34 @@ export type Genre =
   | 'Thriller'
   | 'Animation';
 
+export const NAMED_VJS = [
+  'VJ Ice P',
+  'VJ Emmy',
+  'VJ Junior',
+  'VJ Kevo',
+  'VJ Uncle T',
+  'VJ Ulio',
+  'VJ Soul',
+  'VJ Jingo',
+  'VJ Tonny',
+  'VJ Neil',
+  'VJ Nelly',
+  'VJ HD',
+  'VJ Sammy',
+  'VJ Shield',
+  'VJ Banks',
+  'VJ IVO',
+  'VJ Little T',
+] as const;
+
+export const VJ_FILTER_OPTIONS = [
+  'All VJs',
+  ...NAMED_VJS,
+  'Other VJs',
+] as const;
+
+export type VJFilter = (typeof VJ_FILTER_OPTIONS)[number];
+
 export type ContentMode = 'movies' | 'tvshows' | 'livetv';
 
 export interface LiveTVChannel {
@@ -53,6 +81,7 @@ export interface Movie {
   isTrending?: boolean;
   isFeatured?: boolean;
   isUgandanExclusive?: boolean;
+  vjName?: string;
   vjTracks: VJTrack[];
   viewsCount?: number;
   rating5?: number; // 5-star scale average rating (1.0 - 5.0)

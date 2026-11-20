@@ -20,6 +20,31 @@ import { BottomNavBar } from './components/BottomNavBar';
 import { OfflineIndicator } from './components/PWAInstallButton';
 import { WhatsAppSupportButton } from './components/WhatsAppSupportButton';
 import { WifiOff, Film, Loader2, AlertCircle } from 'lucide-react';
+import { Movie, NAMED_VJS, VJFilter } from './types';
+
+const normalizeLabel = (val: string) => val.trim().toLowerCase().replace(/\s+/g, ' ');
+
+function movieMatchesSelectedVJ(movie: Movie, selectedVJ: VJFilter): boolean {
+  if (selectedVJ === 'All VJs') return true;
+
+  const trackNames = (movie.vjTracks || []).map((t) => normalizeLabel(t.name)).filter(Boolean);
+  const explicitVj = movie.vjName ? normalizeLabel(movie.vjName) : '';
+  const searchableText = normalizeLabel(`${movie.title || ''} ${movie.description || ''}`);
+
+  const matchesNamedVJ = (vjLabel: string): boolean => {
+    const target = normalizeLabel(vjLabel);
+    if (trackNames.some((n) => n === target || n.includes(target))) return true;
+    if (explicitVj && (explicitVj === target || explicitVj.includes(target))) return true;
+    if (searchableText.includes(target)) return true;
+    return false;
+  };
+
+  if (selectedVJ === 'Other VJs') {
+    return !NAMED_VJS.some((known) => matchesNamedVJ(known));
+  }
+
+  return matchesNamedVJ(selectedVJ);
+}
 
 const MainContent: React.FC = () => {
   const {
@@ -28,6 +53,8 @@ const MainContent: React.FC = () => {
     activeTab,
     selectedGenre,
     setSelectedGenre,
+    selectedVJ,
+    setSelectedVJ,
     movies,
     moviesLoading,
     firestoreError,
@@ -67,12 +94,28 @@ const MainContent: React.FC = () => {
   const dramaMovies = movies.filter((m) => m.genre === 'Drama');
   const thrillerMovies = movies.filter((m) => m.genre === 'Thriller');
 
-  // Currently filtered view when a specific genre is chosen in CategoryBar
+  // Currently filtered view when a specific genre, VJ toggle, or Browse-by-VJ chip is active
+  const isFilteredView = selectedGenre !== 'All' || filterVJOnly || selectedVJ !== 'All VJs';
   const activeGenreMovies = movies.filter((m) => {
     const matchesGenre = selectedGenre === 'All' || m.genre === selectedGenre;
-    const matchesVJ = !filterVJOnly || (m.vjTracks && m.vjTracks.length > 0);
-    return matchesGenre && matchesVJ;
+    const matchesVJToggle = !filterVJOnly || (m.vjTracks && m.vjTracks.length > 0);
+    const matchesSelectedVJ = movieMatchesSelectedVJ(m, selectedVJ);
+    return matchesGenre && matchesVJToggle && matchesSelectedVJ;
   });
+
+  const filteredTitle =
+    selectedVJ !== 'All VJs' && selectedGenre !== 'All'
+      ? `${selectedVJ} · ${selectedGenre} Films`
+      : selectedVJ !== 'All VJs'
+        ? `${selectedVJ} Movies`
+        : selectedGenre === 'All'
+          ? 'VJ Translated Films'
+          : `${selectedGenre} Films`;
+
+  const filteredEmptyMessage =
+    selectedVJ !== 'All VJs'
+      ? `No movies found for ${selectedVJ} yet. Try selecting All VJs or another VJ.`
+      : 'No movies found in this category.';
 
   return (
     <div className="min-h-screen bg-[#070709] text-gray-100 flex flex-col font-['Plus_Jakarta_Sans'] pb-24">
@@ -144,15 +187,21 @@ const MainContent: React.FC = () => {
                       setFilterVJOnly={setFilterVJOnly}
                     />
 
-                    {/* When a specific Genre or VJ filter is selected */}
-                    {selectedGenre !== 'All' || filterVJOnly ? (
+                    {/* When a specific Genre, VJ Translated toggle, or Browse-by-VJ filter is selected */}
+                    {isFilteredView ? (
                       <div className="py-2">
                         <MovieGrid
-                          title={selectedGenre === 'All' ? 'VJ Translated Films' : `${selectedGenre} Films`}
-                          subtitle={`Discover curated ${selectedGenre.toLowerCase()} cinema with high-definition audio & VJ translation`}
+                          title={filteredTitle}
+                          subtitle={
+                            selectedVJ !== 'All VJs'
+                              ? `Showing ${activeGenreMovies.length} ${activeGenreMovies.length === 1 ? 'movie' : 'movies'} translated by ${selectedVJ}`
+                              : `Discover curated ${selectedGenre.toLowerCase()} cinema with high-definition audio & VJ translation`
+                          }
                           movies={activeGenreMovies}
+                          emptyMessage={filteredEmptyMessage}
                           onExploreAll={() => {
                             setSelectedGenre('All');
+                            setSelectedVJ('All VJs');
                             setFilterVJOnly(false);
                           }}
                         />

@@ -45,7 +45,8 @@ import {
   PlayableItem,
   ContinueWatchingItem,
   WatchHistoryItem,
-  LiveTVChannel
+  LiveTVChannel,
+  VJFilter
 } from '../types';
 
 interface MovieContextType {
@@ -68,6 +69,7 @@ interface MovieContextType {
   offlineMode: boolean;
   activeTab: ActiveTab;
   selectedGenre: Genre;
+  selectedVJ: VJFilter;
   searchQuery: string;
   selectedMovieForDetails: Movie | null;
   selectedShowForDetails: TVShow | null;
@@ -81,6 +83,7 @@ interface MovieContextType {
   // Actions
   setActiveTab: (tab: ActiveTab) => void;
   setSelectedGenre: (genre: Genre) => void;
+  setSelectedVJ: (vj: VJFilter) => void;
   setSearchQuery: (query: string) => void;
   toggleWatchlist: (id: string) => void;
   isInWatchlist: (id: string) => boolean;
@@ -409,6 +412,7 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   }, []);
 
   const [selectedGenre, setSelectedGenre] = useState<Genre>('All');
+  const [selectedVJ, setSelectedVJ] = useState<VJFilter>('All VJs');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
   const [selectedMovieForDetails, setSelectedMovieForDetails] = useState<Movie | null>(null);
@@ -515,6 +519,24 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             (typeof data.url === 'string' && data.url) ||
             '';
 
+          const rawVjName =
+            (typeof data.vjName === 'string' && data.vjName.trim()) ||
+            (typeof data.vj === 'string' && data.vj.trim()) ||
+            '';
+          const loadedVjTracks: VJTrack[] = Array.isArray(data.vjTracks)
+            ? (data.vjTracks as VJTrack[])
+            : rawVjName
+              ? [
+                  {
+                    id: 'vj_primary',
+                    name: rawVjName,
+                    language: 'Luganda',
+                    isDefault: true,
+                    commentaryQuotes: [],
+                  },
+                ]
+              : [];
+
           return {
             id: docSnap.id,
             title: typeof data.title === 'string' ? data.title : 'Untitled Movie',
@@ -540,7 +562,8 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             isTrending: Boolean(data.isTrending),
             isFeatured: Boolean(data.isFeatured),
             isUgandanExclusive: Boolean(data.isUgandanExclusive),
-            vjTracks: Array.isArray(data.vjTracks) ? (data.vjTracks as VJTrack[]) : [],
+            vjName: rawVjName || loadedVjTracks[0]?.name || '',
+            vjTracks: loadedVjTracks,
             viewsCount: typeof data.viewsCount === 'number' ? data.viewsCount : 0,
             createdAt: parseTimestampMs(data.createdAt),
           };
@@ -1371,6 +1394,7 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       isTrending: Boolean(movieData.isTrending),
       isFeatured: Boolean(movieData.isFeatured),
       isUgandanExclusive: Boolean(movieData.isUgandanExclusive),
+      vjName: vjTracks[0]?.name || '',
       vjTracks,
       viewsCount: 0,
       createdAt: serverTimestamp(),
@@ -1418,6 +1442,7 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         isTrending: Boolean(updatedMovie.isTrending),
         isFeatured: Boolean(updatedMovie.isFeatured),
         isUgandanExclusive: Boolean(updatedMovie.isUgandanExclusive),
+        vjName: updatedMovie.vjTracks?.[0]?.name || updatedMovie.vjName || '',
         vjTracks: updatedMovie.vjTracks || [],
       });
       showToast(`Updated "${updatedMovie.title}"`);
@@ -2302,6 +2327,7 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         offlineMode,
         activeTab,
         selectedGenre,
+        selectedVJ,
         searchQuery,
         selectedMovieForDetails,
         selectedShowForDetails,
@@ -2313,6 +2339,7 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         toastMessage,
         setActiveTab,
         setSelectedGenre,
+        setSelectedVJ,
         setSearchQuery,
         toggleWatchlist,
         isInWatchlist,

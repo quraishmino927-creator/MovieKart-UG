@@ -28,7 +28,7 @@ import {
   AlertCircle,
   Radio
 } from 'lucide-react';
-import { Movie, Genre, LiveTVChannel } from '../types';
+import { Movie, Genre, LiveTVChannel, NAMED_VJS } from '../types';
 import { toYouTubeEmbedUrl } from '../lib/liveChannels';
 
 export const AdminDashboard: React.FC = () => {
@@ -1517,9 +1517,12 @@ export const AdminDashboard: React.FC = () => {
                     onChange={(e) => setMovieForm({ ...movieForm, vjName: e.target.value })}
                     className="w-full bg-[#181822] text-white p-2 rounded-lg border border-white/10 focus:outline-none"
                   >
-                    <option value="VJ Junior">VJ Junior</option>
-                    <option value="VJ Emmy">VJ Emmy</option>
-                    <option value="VJ Jingo">VJ Jingo</option>
+                    {NAMED_VJS.map((vj) => (
+                      <option key={vj} value={vj}>
+                        {vj}
+                      </option>
+                    ))}
+                    <option value="Other VJs">Other VJs</option>
                     <option value="Original English">Original Studio Track</option>
                   </select>
                 </div>
