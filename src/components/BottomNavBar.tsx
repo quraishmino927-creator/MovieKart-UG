@@ -21,9 +21,9 @@ export const BottomNavBar: React.FC = () => {
   return (
     <nav
       aria-label="Bottom Navigation"
-      className="fixed bottom-0 inset-x-0 z-40 bg-[#070709]/95 backdrop-blur-lg border-t border-white/5 pb-safe transition-all"
+      className="fixed bottom-0 inset-x-0 z-[45] bg-[#070709]/95 backdrop-blur-lg border-t border-white/10 pb-safe transition-all"
     >
-      <div className="max-w-lg mx-auto px-1 flex items-center justify-around h-16">
+      <div className="max-w-lg mx-auto px-1 flex items-center justify-around min-h-16">
         {navItems.map((item) => {
           const isActive = activeTab === item.id;
           const Icon = item.icon;
