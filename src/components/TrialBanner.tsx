@@ -1,6 +1,6 @@
 import React from 'react';
 import { useMovieContext } from '../context/MovieContext';
-import { Clock, AlertTriangle, Crown } from 'lucide-react';
+import { Clock, AlertTriangle, Crown, Lock } from 'lucide-react';
 
 interface TrialBannerProps {
   onSubscribeClick: () => void;
@@ -52,6 +52,7 @@ export const TrialBanner: React.FC<TrialBannerProps> = ({ onSubscribeClick }) =>
         <button
           type="button"
           onClick={onSubscribeClick}
+          title="Subscriptions are Locked for Now - Coming Soon"
           className={`inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-extrabold transition-all shrink-0 cursor-pointer ${
             isExpiringSoon
               ? 'bg-[#E50914] hover:bg-red-700 text-white shadow-md shadow-red-600/30'
@@ -60,6 +61,7 @@ export const TrialBanner: React.FC<TrialBannerProps> = ({ onSubscribeClick }) =>
         >
           <Crown className="w-3.5 h-3.5 text-amber-400" />
           <span>Subscribe</span>
+          <Lock className="w-3 h-3 text-amber-300 shrink-0" aria-hidden="true" />
         </button>
       </div>
     </div>

@@ -1,9 +1,13 @@
 import React from 'react';
 import { useMovieContext } from '../context/MovieContext';
-import { Search, Wifi, WifiOff, Film, Tv, Heart, DownloadCloud, Radio } from 'lucide-react';
+import { Search, Wifi, WifiOff, Film, Tv, Heart, DownloadCloud, Radio, Lock, Crown } from 'lucide-react';
 import { PWAInstallButton } from './PWAInstallButton';
 
-export const Header: React.FC = () => {
+interface HeaderProps {
+  onLockedSubscribeClick?: () => void;
+}
+
+export const Header: React.FC<HeaderProps> = ({ onLockedSubscribeClick }) => {
   const {
     contentMode,
     setContentMode,
@@ -128,6 +132,20 @@ export const Header: React.FC = () => {
 
         {/* Right Action Zone */}
         <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
+          {/* Locked Subscription Button (Viewer navigation only; hidden on /admin and /poster) */}
+          {activeTab !== 'admin' && activeTab !== 'poster' && onLockedSubscribeClick && (
+            <button
+              type="button"
+              onClick={onLockedSubscribeClick}
+              title="Subscriptions are Locked for Now - Coming Soon"
+              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl bg-[#181822] hover:bg-[#222230] text-amber-300 border border-amber-500/35 text-[11px] sm:text-xs font-extrabold transition-all shrink-0 cursor-pointer active:scale-95"
+            >
+              <Crown className="w-3.5 h-3.5 text-amber-400 hidden sm:inline shrink-0" />
+              <span>Subscribe</span>
+              <Lock className="w-3 h-3 text-amber-400 shrink-0" aria-hidden="true" />
+            </button>
+          )}
+
           {/* Offline Mode Switch */}
           <button
             onClick={() => {

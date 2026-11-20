@@ -248,4 +248,4 @@ export interface UserAccount {
   moviesWatchedCount?: number;
 }
 
-export type ActiveTab = 'home' | 'livetv' | 'search' | 'watchlist' | 'downloads' | 'profile' | 'admin';
+export type ActiveTab = 'home' | 'livetv' | 'search' | 'watchlist' | 'downloads' | 'profile' | 'admin' | 'poster';

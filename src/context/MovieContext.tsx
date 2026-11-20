@@ -6,6 +6,7 @@ import {
   updateDoc,
   deleteDoc,
   getDoc,
+  getDocs,
   setDoc,
   doc,
   serverTimestamp,
@@ -206,9 +207,11 @@ interface MovieContextType {
   setOfflineMode: (offline: boolean) => void;
   setCurrentUser: (user: UserAccount | null) => void;
 
-  // Firebase Admin Auth & Firestore CRUD Actions
+  // Firebase Admin & Poster Auth & Firestore CRUD Actions
   loginAdminWithEmail: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
   logoutAdmin: () => Promise<void>;
+  loginPosterWithEmail: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  logoutPoster: () => Promise<void>;
   inviteTeamMember: (
     email: string,
     password: string,
@@ -265,6 +268,7 @@ const STORAGE_KEYS = {
   HAS_SIGNED_UP: 'moviekart_ug_has_signed_up',
   TEAM_MEMBERS: 'moviekart_ug_team_members',
   POSTER_SESSION: 'moviekart_ug_poster_session',
+  ADMIN_EMAIL: 'moviekart_ug_admin_email',
 };
 
 function parseTimestampMs(val: unknown): number {
@@ -425,8 +429,15 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     return path.endsWith('/admin') || hash === '#/admin';
   };
 
+  const isPosterPath = () => {
+    if (typeof window === 'undefined') return false;
+    const path = window.location.pathname.replace(/\/+$/, '').toLowerCase();
+    const hash = window.location.hash.replace(/\/+$/, '').toLowerCase();
+    return path.endsWith('/poster') || hash === '#/poster';
+  };
+
   const [activeTab, setActiveTabState] = useState<ActiveTab>(() =>
-    isAdminPath() ? 'admin' : 'home'
+    isAdminPath() ? 'admin' : isPosterPath() ? 'poster' : 'home'
   );
 
   const setActiveTab = (tab: ActiveTab) => {
@@ -434,7 +445,9 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     if (typeof window !== 'undefined') {
       if (tab === 'admin' && !isAdminPath()) {
         window.history.pushState({}, '', '/admin');
-      } else if (tab !== 'admin' && isAdminPath()) {
+      } else if (tab === 'poster' && !isPosterPath()) {
+        window.history.pushState({}, '', '/poster');
+      } else if (tab !== 'admin' && tab !== 'poster' && (isAdminPath() || isPosterPath())) {
         window.history.pushState({}, '', '/');
       }
     }
@@ -442,7 +455,7 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
   useEffect(() => {
     const syncRoute = () => {
-      setActiveTabState(isAdminPath() ? 'admin' : 'home');
+      setActiveTabState(isAdminPath() ? 'admin' : isPosterPath() ? 'poster' : 'home');
     };
     window.addEventListener('popstate', syncRoute);
     window.addEventListener('hashchange', syncRoute);
@@ -1265,7 +1278,7 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
 
   const ensureTrialAllowsPlayback = (): boolean => {
-    if (activeTab === 'admin' && isAdminAuthenticated) return true;
+    if ((activeTab === 'admin' || activeTab === 'poster') && isAdminAuthenticated) return true;
     if (!currentUser) {
       showToast('Please sign up or log in to watch.');
       return false;
@@ -1639,6 +1652,9 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       setPosterSessionEmail(null);
       try {
         localStorage.removeItem(STORAGE_KEYS.POSTER_SESSION);
+        if (!invitedPoster) {
+          localStorage.setItem(STORAGE_KEYS.ADMIN_EMAIL, cleanEmail);
+        }
       } catch {}
       showToast(invitedPoster ? `Signed in as Poster (${cleanEmail})` : 'Admin signed in with Firebase Auth');
       return { success: true };
@@ -1672,6 +1688,138 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }
   };
 
+  // Dedicated /poster Login: ONLY invited emails in Team Members with role === 'Poster'
+  const loginPosterWithEmail = async (
+    email: string,
+    password: string
+  ): Promise<{ success: boolean; error?: string }> => {
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      return { success: false, error: 'Please enter a valid email address.' };
+    }
+    if (!password) {
+      return { success: false, error: 'Please enter your password.' };
+    }
+
+    // 1. Gather latest team members from local state + Firestore team_members collection
+    let matchedMember: TeamMember | undefined = teamMembers.find(
+      (m) => m.status !== 'removed' && m.email.trim().toLowerCase() === cleanEmail
+    );
+    const knownAdminEmails = new Set<string>();
+    try {
+      const savedAdminEmail = localStorage.getItem(STORAGE_KEYS.ADMIN_EMAIL);
+      if (savedAdminEmail) knownAdminEmails.add(savedAdminEmail.trim().toLowerCase());
+    } catch {}
+    if (adminUser?.email && adminRole === 'Admin') {
+      knownAdminEmails.add(adminUser.email.trim().toLowerCase());
+    }
+    teamMembers.forEach((m) => {
+      if (m.invitedBy && m.invitedBy.includes('@')) {
+        knownAdminEmails.add(m.invitedBy.trim().toLowerCase());
+      }
+      if (m.role === 'Admin' && m.status !== 'removed') {
+        knownAdminEmails.add(m.email.trim().toLowerCase());
+      }
+    });
+
+    if (!matchedMember) {
+      const memberId = `tm_${cleanEmail.replace(/[^a-z0-9]/g, '_')}`;
+      try {
+        const directSnap = await getDoc(doc(db, 'team_members', memberId));
+        if (directSnap.exists()) {
+          const data = directSnap.data() as Record<string, unknown>;
+          if (data.status !== 'removed') {
+            matchedMember = {
+              id: directSnap.id,
+              email: typeof data.email === 'string' ? data.email.trim().toLowerCase() : cleanEmail,
+              role: (data.role === 'Admin' ? 'Admin' : 'Poster') as TeamRole,
+              password: typeof data.password === 'string' ? data.password : undefined,
+              invitedBy: typeof data.invitedBy === 'string' ? data.invitedBy : undefined,
+              createdAt: parseTimestampMs(data.createdAt),
+              status: 'active',
+            };
+          }
+        }
+      } catch {
+        // Ignore if Firestore rules restrict single-doc read
+      }
+    }
+
+    if (!matchedMember) {
+      try {
+        const snap = await getDocs(collection(db, 'team_members'));
+        snap.docs.forEach((docSnap) => {
+          const data = docSnap.data() as Record<string, unknown>;
+          const docEmail = typeof data.email === 'string' ? data.email.trim().toLowerCase() : '';
+          if (typeof data.invitedBy === 'string' && data.invitedBy.includes('@')) {
+            knownAdminEmails.add(data.invitedBy.trim().toLowerCase());
+          }
+          if (data.status !== 'removed' && docEmail === cleanEmail) {
+            matchedMember = {
+              id: docSnap.id,
+              email: docEmail,
+              role: (data.role === 'Admin' ? 'Admin' : 'Poster') as TeamRole,
+              password: typeof data.password === 'string' ? data.password : undefined,
+              invitedBy: typeof data.invitedBy === 'string' ? data.invitedBy : undefined,
+              createdAt: parseTimestampMs(data.createdAt),
+              status: 'active',
+            };
+          }
+        });
+      } catch {
+        // Ignore if Firestore rules restrict collection read
+      }
+    }
+
+    // 2. Enforce strict Poster-only invitation & role checks
+    if (!matchedMember) {
+      if (knownAdminEmails.has(cleanEmail)) {
+        return { success: false, error: 'This login is for Posters only.' };
+      }
+      return { success: false, error: 'You are not invited as a Poster. Contact Admin.' };
+    }
+
+    if (matchedMember.role !== 'Poster') {
+      return { success: false, error: 'This login is for Posters only.' };
+    }
+
+    // Keep matched Poster synced in local teamMembers state so adminRole resolves immediately to 'Poster'
+    const verifiedPoster = matchedMember;
+    setTeamMembers((prev) => {
+      const exists = prev.some((m) => m.id === verifiedPoster.id);
+      if (exists) return prev;
+      const next = [verifiedPoster, ...prev];
+      try {
+        localStorage.setItem(STORAGE_KEYS.TEAM_MEMBERS, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+
+    // 3. Authenticate Poster via Firebase Auth (with fallback to invited password)
+    try {
+      await signInWithEmailAndPassword(adminAuth, cleanEmail, password);
+      setPosterSessionEmail(cleanEmail);
+      try {
+        localStorage.setItem(STORAGE_KEYS.POSTER_SESSION, cleanEmail);
+      } catch {}
+      showToast(`Signed in as Poster (${cleanEmail})`);
+      return { success: true };
+    } catch {
+      if (verifiedPoster.password && verifiedPoster.password === password) {
+        if (adminAuth.currentUser) {
+          await signOut(adminAuth).catch(() => {});
+        }
+        setPosterSessionEmail(cleanEmail);
+        try {
+          localStorage.setItem(STORAGE_KEYS.POSTER_SESSION, cleanEmail);
+        } catch {}
+        showToast(`Signed in as Poster (${cleanEmail})`);
+        return { success: true };
+      }
+      return { success: false, error: 'Invalid email or password.' };
+    }
+  };
+
   const logoutAdmin = async () => {
     try {
       if (adminAuth.currentUser) {
@@ -1685,6 +1833,22 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       localStorage.removeItem(STORAGE_KEYS.POSTER_SESSION);
     } catch {}
     showToast('Signed out of Admin Portal');
+  };
+
+  const logoutPoster = async () => {
+    try {
+      if (adminAuth.currentUser) {
+        await signOut(adminAuth);
+      }
+    } catch (error) {
+      console.error('Poster sign out error:', error);
+    }
+    setPosterSessionEmail(null);
+    try {
+      localStorage.removeItem(STORAGE_KEYS.POSTER_SESSION);
+    } catch {}
+    setActiveTab('poster');
+    showToast('Logged out of Poster Portal');
   };
 
   // Team Members Management (Admin only)
@@ -3303,6 +3467,8 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         switchUserAccount,
         loginAdminWithEmail,
         logoutAdmin,
+        loginPosterWithEmail,
+        logoutPoster,
         inviteTeamMember,
         removeTeamMember,
         isOwnedByCurrentStaff,

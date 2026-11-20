@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
 import express from 'express';
 import type { Request, Response } from 'express';
@@ -373,6 +374,7 @@ async function resolveYouTubeUrl(rawInput: string): Promise<ResolvedYouTubeResul
 
 async function startServer() {
   const app = express();
+  const httpServer = http.createServer(app);
   const PORT = Number(process.env.PORT || 3000);
   const distDir = path.resolve(import.meta.dirname, 'dist');
   const isProd =
@@ -410,6 +412,7 @@ async function startServer() {
     const vite = await createViteServer({
       server: {
         middlewareMode: true,
+        ws: { server: httpServer },
       },
       appType: 'spa',
     });
@@ -421,7 +424,7 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`MovieKart UG server listening on http://0.0.0.0:${PORT} (${isProd ? 'production' : 'development'})`);
   });
 }

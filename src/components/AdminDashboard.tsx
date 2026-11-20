@@ -35,12 +35,18 @@ import {
   Clock,
   Crown,
   KeyRound,
+  LogOut,
 } from 'lucide-react';
 import { Movie, Genre, LiveTVChannel, NAMED_VJS, TrialStatus } from '../types';
 import { toYouTubeEmbedUrl } from '../lib/liveChannels';
 import { getUserTrialInfo } from '../lib/trial';
+import { AdminInsightsView } from './AdminInsightsView';
 
-export const AdminDashboard: React.FC = () => {
+interface AdminDashboardProps {
+  portalMode?: 'admin' | 'poster';
+}
+
+export const AdminDashboard: React.FC<AdminDashboardProps> = ({ portalMode = 'admin' }) => {
   const {
     movies,
     tvShows,
@@ -72,11 +78,14 @@ export const AdminDashboard: React.FC = () => {
     isOwnedByCurrentStaff,
     loginAdminWithEmail,
     logoutAdmin,
+    loginPosterWithEmail,
+    logoutPoster,
     setActiveTab,
     showToast
   } = useMovieContext();
 
-  const isPoster = adminRole === 'Poster';
+  const isPosterPortal = portalMode === 'poster';
+  const isPoster = isPosterPortal || adminRole === 'Poster';
   const [activeAdminTab, setActiveAdminTab] = useState<
     'movies' | 'tvshows' | 'livetv' | 'users' | 'subscriptions' | 'analytics' | 'team'
   >('movies');
@@ -202,7 +211,9 @@ export const AdminDashboard: React.FC = () => {
     e.preventDefault();
     setAuthError(null);
     setAuthSubmitting(true);
-    const res = await loginAdminWithEmail(adminEmail, adminPassword);
+    const res = isPosterPortal
+      ? await loginPosterWithEmail(adminEmail, adminPassword)
+      : await loginAdminWithEmail(adminEmail, adminPassword);
     setAuthSubmitting(false);
     if (!res.success && res.error) {
       setAuthError(res.error);
@@ -214,16 +225,117 @@ export const AdminDashboard: React.FC = () => {
   // Show loading while checking Firebase Auth state
   if (adminAuthLoading) {
     return (
-      <div className="max-w-md mx-auto px-4 py-24 text-center">
-        <div className="p-8 rounded-3xl bg-[#121218] border border-white/10 shadow-2xl space-y-4">
+      <div className={isPosterPortal ? 'min-h-screen flex items-center justify-center px-4' : 'max-w-md mx-auto px-4 py-24 text-center'}>
+        <div className="p-8 rounded-3xl bg-[#121218] border border-white/10 shadow-2xl space-y-4 text-center w-full max-w-md">
           <Loader2 className="w-8 h-8 mx-auto text-[#E50914] animate-spin" />
-          <p className="text-xs text-gray-400">Verifying Firebase Admin session...</p>
+          <p className="text-xs text-gray-400">
+            {isPosterPortal ? 'Verifying Poster session...' : 'Verifying Firebase Admin session...'}
+          </p>
         </div>
       </div>
     );
   }
 
-  // Firebase Email/Password Admin Login Gate
+  // Dedicated /poster Login Page (ONLY invited Posters — NO Sign Up / NO Create Account / NO viewer movies)
+  if (isPosterPortal && (!isAdminAuthenticated || adminRole !== 'Poster')) {
+    return (
+      <div className="min-h-screen bg-[#070709] flex items-center justify-center px-4 py-12">
+        <div className="w-full max-w-md space-y-6">
+          {/* MovieKart UG Brand Header */}
+          <div className="text-center space-y-2">
+            <div className="inline-flex items-center justify-center gap-2.5">
+              <span className="w-10 h-10 rounded-xl bg-[#E50914] flex items-center justify-center shadow-lg shadow-red-600/30">
+                <Film className="w-5 h-5 text-white" />
+              </span>
+              <span className="text-2xl font-black tracking-tight text-white font-['Outfit']">
+                Movie<span className="text-[#E50914]">Kart</span>{' '}
+                <span className="text-xs font-extrabold text-gray-400 align-top">UG</span>
+              </span>
+            </div>
+          </div>
+
+          <div className="p-7 sm:p-8 rounded-3xl bg-[#111116] border border-white/10 shadow-2xl space-y-6">
+            <div className="text-center space-y-2">
+              <div className="w-14 h-14 mx-auto rounded-2xl bg-[#E50914]/15 border border-[#E50914]/30 text-[#E50914] flex items-center justify-center">
+                <Lock className="w-7 h-7" />
+              </div>
+              <h1 className="text-2xl font-extrabold text-white font-['Outfit']">
+                Poster Login
+              </h1>
+              <p className="text-xs text-gray-400">
+                Sign in with your invited Poster email &amp; password.
+              </p>
+            </div>
+
+            <form onSubmit={handleAdminLoginSubmit} className="space-y-4 text-xs">
+              <div>
+                <label className="block text-gray-300 font-semibold mb-1.5">Email</label>
+                <div className="relative">
+                  <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                  <input
+                    type="email"
+                    required
+                    value={adminEmail}
+                    onChange={(e) => setAdminEmail(e.target.value)}
+                    placeholder="poster@moviekart.ug"
+                    autoFocus
+                    className="w-full bg-black/70 border border-white/15 rounded-xl pl-10 pr-3.5 py-2.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-[#E50914]"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-gray-300 font-semibold mb-1.5">Password</label>
+                <div className="relative">
+                  <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                  <input
+                    type={showAdminPassword ? 'text' : 'password'}
+                    required
+                    value={adminPassword}
+                    onChange={(e) => setAdminPassword(e.target.value)}
+                    placeholder="Enter your password"
+                    className="w-full bg-black/70 border border-white/15 rounded-xl pl-10 pr-10 py-2.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-[#E50914]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowAdminPassword(!showAdminPassword)}
+                    aria-label={showAdminPassword ? 'Hide password' : 'Show password'}
+                    className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white cursor-pointer"
+                  >
+                    {showAdminPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              {authError && (
+                <div className="flex items-start gap-2 p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400 text-xs text-left">
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>{authError}</span>
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={authSubmitting}
+                className="w-full py-3 bg-[#E50914] hover:bg-red-700 disabled:opacity-60 text-white font-bold text-sm rounded-xl transition-all shadow-lg shadow-red-600/30 flex items-center justify-center gap-2 cursor-pointer"
+              >
+                {authSubmitting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Logging in...</span>
+                  </>
+                ) : (
+                  <span>Login as Poster</span>
+                )}
+              </button>
+            </form>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Firebase Email/Password Admin Login Gate (/admin)
   if (!isAdminAuthenticated) {
     return (
       <div className="max-w-md mx-auto px-4 py-14">
@@ -710,7 +822,7 @@ export const AdminDashboard: React.FC = () => {
               <ShieldCheck className="w-5 h-5" />
             </span>
             <h1 className="text-2xl sm:text-3xl font-extrabold text-white font-['Outfit']">
-              {isPoster ? 'Poster Studio' : 'Admin Operations Dashboard'}
+              {isPoster ? 'Poster Dashboard' : 'Admin Operations Dashboard'}
             </h1>
             <span
               className={`px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider border ${
@@ -741,7 +853,19 @@ export const AdminDashboard: React.FC = () => {
             <span>Add Movie</span>
           </button>
 
-          {!isPoster && (
+          {isPoster ? (
+            <button
+              type="button"
+              onClick={() => {
+                setPosterContentSection('movies');
+                document.getElementById('poster-my-posts')?.scrollIntoView({ behavior: 'smooth' });
+              }}
+              className="flex items-center gap-1.5 px-3.5 py-2 bg-white/10 hover:bg-white/15 text-white border border-white/15 font-bold text-xs sm:text-sm rounded-xl transition-all cursor-pointer"
+            >
+              <FolderKanban className="w-4 h-4 text-[#E50914]" />
+              <span className="tabular-nums">My Posts ({totalMyPosts})</span>
+            </button>
+          ) : (
             <>
               <button
                 onClick={() => setIsAddTVShowModalOpen(true)}
@@ -774,25 +898,28 @@ export const AdminDashboard: React.FC = () => {
           )}
 
           <button
-            onClick={logoutAdmin}
-            className="px-3.5 py-2 bg-white/5 hover:bg-white/10 text-gray-300 border border-white/10 text-xs font-semibold rounded-xl transition-colors cursor-pointer"
+            onClick={isPosterPortal ? logoutPoster : logoutAdmin}
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-white/5 hover:bg-red-600/20 text-gray-200 hover:text-white border border-white/10 hover:border-red-500/40 text-xs font-semibold rounded-xl transition-colors cursor-pointer"
           >
-            Sign Out
+            <LogOut className="w-3.5 h-3.5" />
+            <span>{isPosterPortal ? 'Logout' : 'Sign Out'}</span>
           </button>
 
-          <button
-            onClick={() => setActiveTab('home')}
-            className="flex items-center gap-1.5 px-3.5 py-2 bg-white/5 hover:bg-white/10 text-gray-300 border border-white/10 text-xs font-semibold rounded-xl transition-colors cursor-pointer"
-          >
-            <ArrowLeft className="w-3.5 h-3.5" />
-            <span>Back to Home</span>
-          </button>
+          {!isPosterPortal && (
+            <button
+              onClick={() => setActiveTab('home')}
+              className="flex items-center gap-1.5 px-3.5 py-2 bg-white/5 hover:bg-white/10 text-gray-300 border border-white/10 text-xs font-semibold rounded-xl transition-colors cursor-pointer"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+              <span>Back to Home</span>
+            </button>
+          )}
         </div>
       </div>
 
       {/* POSTER VIEW: ONLY "Add Movie" (header) and "My Posts" */}
       {isPoster ? (
-        <div className="space-y-6">
+        <div id="poster-my-posts" className="space-y-6">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/5 pb-3">
             <div className="flex items-center gap-2">
               <span className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold bg-[#E50914] text-white shadow-md">
@@ -1946,53 +2073,14 @@ export const AdminDashboard: React.FC = () => {
 
       {/* TAB 6: INSIGHTS (Admin-only) */}
       {activeAdminTab === 'analytics' && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div className="p-5 rounded-2xl bg-[#121217] border border-white/5 space-y-3">
-            <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
-              <Film className="w-4 h-4 text-[#E50914]" />
-              Live Firestore Catalog Summary
-            </h3>
-            <p className="text-xs text-gray-400">
-              All movies are synced in real time via Firestore collection <code className="text-red-400">movies</code>.
-            </p>
-            <div className="grid grid-cols-2 gap-3 pt-2">
-              <div className="p-3 rounded-xl bg-black/40 border border-white/5">
-                <p className="text-[11px] text-gray-400">Published Movies</p>
-                <p className="text-xl font-bold text-white font-mono tabular-nums">{movies.length}</p>
-              </div>
-              <div className="p-3 rounded-xl bg-black/40 border border-white/5">
-                <p className="text-[11px] text-gray-400">Published TV Shows</p>
-                <p className="text-xl font-bold text-white font-mono tabular-nums">{tvShows.length}</p>
-              </div>
-              <div className="p-3 rounded-xl bg-black/40 border border-white/5">
-                <p className="text-[11px] text-gray-400">Signed Up Users</p>
-                <p className="text-xl font-bold text-white font-mono tabular-nums">{users.length}</p>
-              </div>
-              <div className="p-3 rounded-xl bg-black/40 border border-white/5">
-                <p className="text-[11px] text-gray-400">Paid Subscribers</p>
-                <p className="text-xl font-bold text-emerald-400 font-mono tabular-nums">{paidUsersCount}</p>
-              </div>
-            </div>
-          </div>
-
-          <div className="p-5 rounded-2xl bg-[#121217] border border-white/5 space-y-3">
-            <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
-              <UploadCloud className="w-4 h-4 text-[#E50914]" />
-              Firebase Storage Media Pipeline
-            </h3>
-            <p className="text-xs text-gray-400">
-              Posters are stored in <code className="text-red-400">posters/</code> and video streams in{' '}
-              <code className="text-red-400">videos/</code> inside <code className="text-white">moviekart-ug.firebasestorage.app</code>.
-            </p>
-            <div className="p-3 rounded-xl bg-black/40 border border-white/5 flex items-center justify-between text-xs">
-              <span className="text-gray-400 flex items-center gap-1.5">
-                <HardDrive className="w-4 h-4 text-red-400" />
-                Storage Status
-              </span>
-              <span className="text-emerald-400 font-bold">Connected &amp; Ready</span>
-            </div>
-          </div>
-        </div>
+        <AdminInsightsView
+          users={users}
+          movies={movies}
+          tvShows={tvShows}
+          liveChannels={liveChannels}
+          onOpenUsersTab={() => setActiveAdminTab('users')}
+          onOpenAddUserModal={() => setIsAddUserModalOpen(true)}
+        />
       )}
 
       {/* TAB 7: TEAM MEMBERS PAGE (Admin-only) */}

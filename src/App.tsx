@@ -21,6 +21,7 @@ import { OfflineIndicator } from './components/PWAInstallButton';
 import { WhatsAppSupportButton } from './components/WhatsAppSupportButton';
 import { TrialBanner } from './components/TrialBanner';
 import { TrialExpiredPaywall } from './components/TrialExpiredPaywall';
+import { SubscriptionLockedModal } from './components/SubscriptionLockedModal';
 import { WifiOff, Film, Loader2, AlertCircle } from 'lucide-react';
 import { Movie, NAMED_VJS, VJFilter } from './types';
 
@@ -66,7 +67,7 @@ const MainContent: React.FC = () => {
   } = useMovieContext();
 
   const [filterVJOnly, setFilterVJOnly] = useState(false);
-  const [showSubscribePage, setShowSubscribePage] = useState(false);
+  const [showSubscriptionLockedModal, setShowSubscriptionLockedModal] = useState(false);
 
   // Admin route (/admin): only accessible by typing /admin at the end of the URL
   if (activeTab === 'admin') {
@@ -78,6 +79,26 @@ const MainContent: React.FC = () => {
         </main>
         {toastMessage && (
           <div className="fixed top-20 right-4 sm:right-8 z-50 animate-bounce duration-200">
+            <div className="bg-[#181824] border border-red-500/50 text-white px-4 py-2.5 rounded-2xl shadow-2xl flex items-center gap-2.5 text-xs sm:text-sm font-semibold backdrop-blur-md">
+              <span className="w-2 h-2 rounded-full bg-red-500 animate-ping" />
+              <span>{toastMessage}</span>
+            </div>
+          </div>
+        )}
+        <VideoPlayerModal />
+      </div>
+    );
+  }
+
+  // Dedicated Poster Portal route (/poster): ONLY Poster Login / Poster Dashboard — NO viewer movies or nav
+  if (activeTab === 'poster') {
+    return (
+      <div className="min-h-screen bg-[#070709] text-gray-100 flex flex-col font-['Plus_Jakarta_Sans']">
+        <main className="flex-1">
+          <AdminDashboard portalMode="poster" />
+        </main>
+        {toastMessage && (
+          <div className="fixed top-6 right-4 sm:right-8 z-50">
             <div className="bg-[#181824] border border-red-500/50 text-white px-4 py-2.5 rounded-2xl shadow-2xl flex items-center gap-2.5 text-xs sm:text-sm font-semibold backdrop-blur-md">
               <span className="w-2 h-2 rounded-full bg-red-500 animate-ping" />
               <span>{toastMessage}</span>
@@ -106,14 +127,11 @@ const MainContent: React.FC = () => {
     );
   }
 
-  // 2. 30-DAY FREE TRIAL EXPIRY PAYWALL (or voluntary Subscribe upgrade screen)
-  if (currentUserTrialInfo?.isExpired || showSubscribePage) {
+  // 2. 30-DAY FREE TRIAL EXPIRY PAYWALL (viewer Subscriptions are locked — tapping Subscribe opens locked popup instead of payment)
+  if (currentUserTrialInfo?.isExpired) {
     return (
       <>
-        <TrialExpiredPaywall
-          allowClose={!currentUserTrialInfo?.isExpired}
-          onClose={() => setShowSubscribePage(false)}
-        />
+        <TrialExpiredPaywall allowClose={false} />
         {toastMessage && (
           <div className="fixed top-6 right-4 sm:right-8 z-50">
             <div className="bg-[#181824] border border-red-500/50 text-white px-4 py-2.5 rounded-2xl shadow-2xl flex items-center gap-2.5 text-xs sm:text-sm font-semibold backdrop-blur-md">
@@ -160,11 +178,11 @@ const MainContent: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-[#070709] text-gray-100 flex flex-col font-['Plus_Jakarta_Sans'] pb-24">
-      {/* Top Header with Movies / TV Shows Toggle */}
-      <Header />
+      {/* Top Header with Movies / TV Shows Toggle & Locked Subscribe Button */}
+      <Header onLockedSubscribeClick={() => setShowSubscriptionLockedModal(true)} />
 
       {/* 30 Days Free Trial Countdown Box */}
-      <TrialBanner onSubscribeClick={() => setShowSubscribePage(true)} />
+      <TrialBanner onSubscribeClick={() => setShowSubscriptionLockedModal(true)} />
 
       {/* Offline Mode Banner */}
       {offlineMode && (
@@ -373,6 +391,10 @@ const MainContent: React.FC = () => {
       <MovieDetailsModal />
       <TVShowDetailsModal />
       <VideoPlayerModal />
+      <SubscriptionLockedModal
+        isOpen={showSubscriptionLockedModal}
+        onClose={() => setShowSubscriptionLockedModal(false)}
+      />
 
       {/* Offline Connectivity Indicator */}
       <OfflineIndicator />

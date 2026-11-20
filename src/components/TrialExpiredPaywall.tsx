@@ -1,12 +1,11 @@
 import React, { useState } from 'react';
 import { useMovieContext } from '../context/MovieContext';
+import { SubscriptionLockedModal } from './SubscriptionLockedModal';
 import {
   Lock,
   Crown,
   CheckCircle2,
-  Smartphone,
   LogOut,
-  Loader2,
   MessageCircle,
   ArrowLeft,
   Film,
@@ -24,39 +23,17 @@ export const TrialExpiredPaywall: React.FC<TrialExpiredPaywallProps> = ({
   const {
     currentUser,
     currentUserTrialInfo,
-    subscribeCurrentUser,
     logoutUser,
   } = useMovieContext();
 
   const [selectedPlan, setSelectedPlan] = useState<'Standard HD' | 'MovieKart VIP'>('MovieKart VIP');
-  const [momoProvider, setMomoProvider] = useState<'MTN Mobile Money' | 'Airtel Money'>(
-    currentUser?.momoProvider || 'MTN Mobile Money'
-  );
-  const [momoPhone, setMomoPhone] = useState(currentUser?.phone || '+256 7');
-  const [submitting, setSubmitting] = useState(false);
-  const [errorMsg, setErrorMsg] = useState('');
+  const [showLockedPopup, setShowLockedPopup] = useState(false);
 
   const isExpired = Boolean(currentUserTrialInfo?.isExpired);
 
-  const handleSubscribe = async (e: React.FormEvent) => {
+  const handleLockedSubscribe = (e: React.FormEvent) => {
     e.preventDefault();
-    setErrorMsg('');
-    const digits = momoPhone.replace(/\D/g, '');
-    if (digits.length < 8) {
-      setErrorMsg('Please enter a valid MTN MoMo or Airtel Money phone number.');
-      return;
-    }
-    setSubmitting(true);
-    try {
-      const res = await subscribeCurrentUser(selectedPlan, momoProvider, momoPhone);
-      if (!res.success && res.error) {
-        setErrorMsg(res.error);
-      } else if (onClose) {
-        onClose();
-      }
-    } finally {
-      setSubmitting(false);
-    }
+    setShowLockedPopup(true);
   };
 
   return (
@@ -175,88 +152,28 @@ export const TrialExpiredPaywall: React.FC<TrialExpiredPaywallProps> = ({
             </button>
           </div>
 
-          {/* Mobile Money Payment Form */}
-          <form onSubmit={handleSubscribe} className="space-y-4">
-            <div className="grid grid-cols-2 gap-2.5">
-              <button
-                type="button"
-                onClick={() => setMomoProvider('MTN Mobile Money')}
-                className={`p-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 cursor-pointer transition-all ${
-                  momoProvider === 'MTN Mobile Money'
-                    ? 'bg-amber-500/20 border-amber-400 text-amber-200'
-                    : 'bg-[#181822] border-white/10 text-gray-400 hover:border-white/25'
-                }`}
-              >
-                <span className="w-2.5 h-2.5 rounded-full bg-amber-400" />
-                <span>MTN Mobile Money</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setMomoProvider('Airtel Money')}
-                className={`p-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 cursor-pointer transition-all ${
-                  momoProvider === 'Airtel Money'
-                    ? 'bg-red-500/20 border-red-400 text-red-200'
-                    : 'bg-[#181822] border-white/10 text-gray-400 hover:border-white/25'
-                }`}
-              >
-                <span className="w-2.5 h-2.5 rounded-full bg-red-500" />
-                <span>Airtel Money</span>
-              </button>
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-gray-300 mb-1.5">
-                {momoProvider} Phone Number
-              </label>
-              <div className="relative">
-                <Smartphone className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                <input
-                  type="tel"
-                  required
-                  value={momoPhone}
-                  onChange={(e) => setMomoPhone(e.target.value)}
-                  placeholder="+256 772 123 456"
-                  className="w-full bg-[#181822] border border-white/15 rounded-xl pl-10 pr-4 py-3 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-[#E50914]"
-                />
-              </div>
-            </div>
-
-            {errorMsg && (
-              <p className="text-xs text-red-300 bg-red-500/10 border border-red-500/30 p-3 rounded-xl">
-                {errorMsg}
-              </p>
-            )}
-
+          {/* Locked Subscription Action (does not open payment) */}
+          <form onSubmit={handleLockedSubscribe} className="space-y-4">
             <button
               type="submit"
-              disabled={submitting}
-              className="w-full py-3.5 px-5 rounded-xl bg-[#E50914] hover:bg-red-700 disabled:opacity-60 text-white font-extrabold text-sm shadow-lg shadow-red-600/30 flex items-center justify-center gap-2 cursor-pointer"
+              className="w-full py-3.5 px-5 rounded-xl bg-[#E50914] hover:bg-red-700 text-white font-extrabold text-sm shadow-lg shadow-red-600/30 flex items-center justify-center gap-2 cursor-pointer"
             >
-              {submitting ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  <span>Activating Subscription...</span>
-                </>
-              ) : (
-                <>
-                  <Crown className="w-4 h-4" />
-                  <span>
-                    Pay & Subscribe ({selectedPlan === 'MovieKart VIP' ? 'UGX 25,000' : 'UGX 15,000'})
-                  </span>
-                </>
-              )}
+              <Crown className="w-4 h-4 text-amber-300" />
+              <span>
+                Subscribe ({selectedPlan === 'MovieKart VIP' ? 'UGX 25,000' : 'UGX 15,000'})
+              </span>
+              <Lock className="w-4 h-4 text-amber-200" aria-hidden="true" />
             </button>
           </form>
 
           {/* Direct WhatsApp Activation Option */}
           <div className="pt-3 border-t border-white/10 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-gray-400">
-            <span>Prefer paying or activating via WhatsApp?</span>
+            <span>Subscriptions are Locked for Now - Coming Soon. Contact Admin on WhatsApp for Access.</span>
             <a
               href="https://wa.me/256741094332"
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[#25D366] hover:bg-[#1ebe5d] text-black font-extrabold text-xs transition-all"
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[#25D366] hover:bg-[#1ebe5d] text-black font-extrabold text-xs transition-all shrink-0"
             >
               <MessageCircle className="w-4 h-4" />
               <span>WhatsApp: +256 741 094 332</span>
@@ -264,6 +181,11 @@ export const TrialExpiredPaywall: React.FC<TrialExpiredPaywallProps> = ({
           </div>
         </div>
       </div>
+
+      <SubscriptionLockedModal
+        isOpen={showLockedPopup}
+        onClose={() => setShowLockedPopup(false)}
+      />
     </div>
   );
 };
