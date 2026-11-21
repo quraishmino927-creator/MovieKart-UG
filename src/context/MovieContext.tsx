@@ -152,7 +152,7 @@ interface MovieContextType {
 
   // Playback
   playMovie: (movie: Movie, vjTrackId?: string) => void;
-  playTrailer: (movie: Movie) => void;
+  playTrailer: (item: Movie | TVShow) => void;
   playEpisode: (show: TVShow, seasonNumber: number, episode: Episode, vjTrackId?: string) => void;
   closePlayer: () => void;
 
@@ -164,7 +164,8 @@ interface MovieContextType {
 
   // Rating system
   rateMovie: (movieId: string, rating: number) => Promise<void>;
-  getUserRating: (movieId: string) => number | undefined;
+  rateTVShow: (showId: string, rating: number) => Promise<void>;
+  getUserRating: (mediaId: string) => number | undefined;
 
   // Viewer Session & Profile Actions
   signUpWithEmailOrPhone: (
@@ -225,6 +226,7 @@ interface MovieContextType {
   addEpisodeToShow: (params: {
     showTitle: string;
     posterUrl?: string;
+    trailerUrl?: string;
     seasonNumber: number;
     episodeNumber: number;
     episodeTitle: string;
@@ -642,18 +644,46 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   }, []);
 
   // 2. Real-time Firestore listener for "movies" collection
+  const parseRealRatingsMap = (raw: unknown): Record<string, number> => {
+    const clean: Record<string, number> = {};
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+      for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+        const num = Number(v);
+        if (Number.isFinite(num) && num >= 1 && num <= 5) {
+          clean[k] = Math.round(num);
+        }
+      }
+    }
+    return clean;
+  };
+
+  const getActiveRaterKey = (): string | null => {
+    const rawKey = auth.currentUser?.uid || currentUser?.id || currentUser?.email || '';
+    const trimmed = rawKey.trim();
+    if (!trimmed) return null;
+    return trimmed.replace(/[^a-zA-Z0-9_-]/g, '_');
+  };
+
+  const computeRealRatingStats = (ratingsMap: Record<string, number>) => {
+    const values = Object.values(ratingsMap);
+    const count = values.length;
+    if (count === 0) {
+      return { rating5: 0, ratingsCount: 0, rating10: 0 };
+    }
+    const avg = +(values.reduce((acc, val) => acc + val, 0) / count).toFixed(1);
+    return { rating5: avg, ratingsCount: count, rating10: +(avg * 2).toFixed(1) };
+  };
+
   useEffect(() => {
+    const activeRaterKey = getActiveRaterKey();
     const moviesRef = collection(db, 'movies');
     const unsubscribe = onSnapshot(
       moviesRef,
       (snapshot) => {
         const loadedMovies: Movie[] = snapshot.docs.map((docSnap) => {
           const data = docSnap.data() as Record<string, unknown>;
-          const rawRating = Number(data.rating) || 8.0;
-          const rating5 =
-            typeof data.rating5 === 'number'
-              ? data.rating5
-              : +Math.min(5, Math.max(1, rawRating / 2)).toFixed(1);
+          const ratingsByUser = parseRealRatingsMap(data.ratingsByUser);
+          const { rating5, ratingsCount, rating10 } = computeRealRatingStats(ratingsByUser);
           const descriptionText =
             (typeof data.description === 'string' && data.description) ||
             (typeof data.synopsis === 'string' && data.synopsis) ||
@@ -667,6 +697,11 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             (typeof data.videoURL === 'string' && data.videoURL) ||
             (typeof data.video_url === 'string' && data.video_url) ||
             (typeof data.url === 'string' && data.url) ||
+            '';
+          const trailerUrl =
+            (typeof data.trailerUrl === 'string' && data.trailerUrl.trim()) ||
+            (typeof data.trailerURL === 'string' && data.trailerURL.trim()) ||
+            (typeof data.trailer === 'string' && data.trailer.trim()) ||
             '';
 
           const rawVjName =
@@ -687,16 +722,22 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
                 ]
               : [];
 
+          const realViewsCount =
+            typeof data.viewsCount === 'number' && Number.isFinite(data.viewsCount) && data.viewsCount > 0
+              ? Math.floor(data.viewsCount)
+              : 0;
+
           return {
             id: docSnap.id,
             title: typeof data.title === 'string' ? data.title : 'Untitled Movie',
             genre: (typeof data.genre === 'string' ? data.genre : 'Action') as Genre,
             year: Number(data.year) || new Date().getFullYear(),
             duration: typeof data.duration === 'string' ? data.duration : '1h 45m',
-            rating: rawRating,
+            rating: rating10,
             rating5,
-            ratingsCount: typeof data.ratingsCount === 'number' ? data.ratingsCount : 0,
-            userRating: userRatings[docSnap.id],
+            ratingsCount,
+            ratingsByUser,
+            userRating: activeRaterKey ? ratingsByUser[activeRaterKey] : undefined,
             ageRating: (typeof data.ageRating === 'string' ? data.ageRating : '16+') as Movie['ageRating'],
             quality: (typeof data.quality === 'string' ? data.quality : '1080p FHD') as Movie['quality'],
             posterUrl,
@@ -707,14 +748,14 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             director: typeof data.director === 'string' ? data.director : '',
             cast: Array.isArray(data.cast) ? (data.cast as string[]) : [],
             videoUrl: videoUrl.trim(),
-            trailerUrl: typeof data.trailerUrl === 'string' ? data.trailerUrl : undefined,
+            trailerUrl: trailerUrl || undefined,
             fileSizeMb: typeof data.fileSizeMb === 'number' ? data.fileSizeMb : 450,
             isTrending: Boolean(data.isTrending),
             isFeatured: Boolean(data.isFeatured),
             isUgandanExclusive: Boolean(data.isUgandanExclusive),
             vjName: rawVjName || loadedVjTracks[0]?.name || '',
             vjTracks: loadedVjTracks,
-            viewsCount: typeof data.viewsCount === 'number' ? data.viewsCount : 0,
+            viewsCount: realViewsCount,
             createdAt: parseTimestampMs(data.createdAt),
             createdBy: typeof data.createdBy === 'string' ? data.createdBy : undefined,
             createdByEmail: typeof data.createdByEmail === 'string' ? data.createdByEmail : undefined,
@@ -723,6 +764,10 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
         loadedMovies.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
         setMovies(loadedMovies);
+        setSelectedMovieForDetails((prev) => {
+          if (!prev) return null;
+          return loadedMovies.find((m) => m.id === prev.id) || prev;
+        });
         setMoviesLoading(false);
         setFirestoreError(null);
       },
@@ -740,22 +785,39 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     );
 
     return () => unsubscribe();
-  }, [userRatings]);
+  }, [currentUser?.id, currentUser?.email]);
 
   // 3. Real-time Firestore listener for "tvshows" collection
   useEffect(() => {
+    const activeRaterKey = getActiveRaterKey();
     const showsRef = collection(db, 'tvshows');
     const unsubscribe = onSnapshot(
       showsRef,
       (snapshot) => {
         const loadedShows: TVShow[] = snapshot.docs.map((docSnap) => {
           const data = docSnap.data() as Record<string, unknown>;
+          const ratingsByUser = parseRealRatingsMap(data.ratingsByUser);
+          const { rating5, ratingsCount, rating10 } = computeRealRatingStats(ratingsByUser);
+          const trailerUrl =
+            (typeof data.trailerUrl === 'string' && data.trailerUrl.trim()) ||
+            (typeof data.trailerURL === 'string' && data.trailerURL.trim()) ||
+            (typeof data.trailer === 'string' && data.trailer.trim()) ||
+            '';
+          const realViewsCount =
+            typeof data.viewsCount === 'number' && Number.isFinite(data.viewsCount) && data.viewsCount > 0
+              ? Math.floor(data.viewsCount)
+              : 0;
+
           return {
             id: docSnap.id,
             title: typeof data.title === 'string' ? data.title : 'Untitled Series',
             genre: (typeof data.genre === 'string' ? data.genre : 'Drama') as Genre,
             year: Number(data.year) || new Date().getFullYear(),
-            rating: Number(data.rating) || 8.5,
+            rating: rating10,
+            rating5,
+            ratingsCount,
+            ratingsByUser,
+            userRating: activeRaterKey ? ratingsByUser[activeRaterKey] : undefined,
             ageRating: (typeof data.ageRating === 'string' ? data.ageRating : '16+') as TVShow['ageRating'],
             quality: (typeof data.quality === 'string' ? data.quality : '1080p FHD') as TVShow['quality'],
             posterUrl: typeof data.posterUrl === 'string' ? data.posterUrl : '',
@@ -770,12 +832,17 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             isUgandanExclusive: Boolean(data.isUgandanExclusive),
             vjTracks: Array.isArray(data.vjTracks) ? (data.vjTracks as VJTrack[]) : [],
             seasons: Array.isArray(data.seasons) ? (data.seasons as TVShow['seasons']) : [],
-            viewsCount: typeof data.viewsCount === 'number' ? data.viewsCount : 0,
+            trailerUrl: trailerUrl || undefined,
+            viewsCount: realViewsCount,
             createdBy: typeof data.createdBy === 'string' ? data.createdBy : undefined,
             createdByEmail: typeof data.createdByEmail === 'string' ? data.createdByEmail : undefined,
           };
         });
         setTvShows(loadedShows);
+        setSelectedShowForDetails((prev) => {
+          if (!prev) return null;
+          return loadedShows.find((s) => s.id === prev.id) || prev;
+        });
         setTvShowsLoading(false);
       },
       (error) => {
@@ -787,7 +854,7 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     );
 
     return () => unsubscribe();
-  }, []);
+  }, [currentUser?.id, currentUser?.email]);
 
   // 4. Real-time Firestore listener for "livetv" collection merged with Ugandan defaults
   useEffect(() => {
@@ -1294,6 +1361,42 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     return true;
   };
 
+  const incrementMediaViews = async (collectionName: 'movies' | 'tvshows', docId: string) => {
+    if (!docId) return;
+
+    if (collectionName === 'movies') {
+      setMovies((prev) =>
+        prev.map((m) => (m.id === docId ? { ...m, viewsCount: (m.viewsCount || 0) + 1 } : m))
+      );
+      setSelectedMovieForDetails((prev) =>
+        prev && prev.id === docId ? { ...prev, viewsCount: (prev.viewsCount || 0) + 1 } : prev
+      );
+    } else {
+      setTvShows((prev) =>
+        prev.map((s) => (s.id === docId ? { ...s, viewsCount: (s.viewsCount || 0) + 1 } : s))
+      );
+      setSelectedShowForDetails((prev) =>
+        prev && prev.id === docId ? { ...prev, viewsCount: (prev.viewsCount || 0) + 1 } : prev
+      );
+    }
+
+    try {
+      await updateDoc(doc(db, collectionName, docId), {
+        viewsCount: increment(1),
+      });
+    } catch {
+      if (adminAuth.currentUser) {
+        try {
+          await updateDoc(doc(adminDb, collectionName, docId), {
+            viewsCount: increment(1),
+          });
+        } catch (err) {
+          console.warn('View count Firestore update skipped:', err);
+        }
+      }
+    }
+  };
+
   const playMovie = (movie: Movie, vjTrackId?: string) => {
     if (!ensureTrialAllowsPlayback()) return;
     if (offlineMode) {
@@ -1303,6 +1406,9 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         return;
       }
     }
+
+    // Increment real view count in Firebase (+1 on every Play / Watch Now)
+    void incrementMediaViews('movies', movie.id);
 
     recordWatchHistory({
       id: movie.id,
@@ -1335,26 +1441,31 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     });
   };
 
-  const playTrailer = (movie: Movie) => {
-    if (!ensureTrialAllowsPlayback()) return;
-    const trailerUrl = movie.trailerUrl || movie.videoUrl;
-    const defaultTrack = movie.vjTracks?.find((t) => t.isDefault) || movie.vjTracks?.[0] || null;
+  const playTrailer = (item: Movie | TVShow) => {
+    const trailerUrl = (item.trailerUrl || '').trim();
+    if (!trailerUrl) {
+      showToast('No trailer available for this title.');
+      return;
+    }
+    const isShow = 'seasons' in item;
+    const defaultTrack = item.vjTracks?.find((t) => t.isDefault) || item.vjTracks?.[0] || null;
     setSelectedVJTrack(defaultTrack);
     setCurrentlyPlayingItem({
-      id: `${movie.id}_trailer`,
-      movieId: movie.id,
-      title: `${movie.title} (Official Teaser)`,
-      subTitle: 'Official Teaser Preview',
+      id: `${item.id}_trailer`,
+      movieId: isShow ? undefined : item.id,
+      showId: isShow ? item.id : undefined,
+      title: `${item.title} (Official Trailer)`,
+      subTitle: 'Official Trailer',
       videoUrl: trailerUrl,
-      posterUrl: movie.posterUrl,
-      backdropUrl: movie.backdropUrl,
-      year: movie.year,
-      quality: movie.quality || 'HD Teaser',
+      posterUrl: item.posterUrl,
+      backdropUrl: item.backdropUrl,
+      year: item.year,
+      quality: item.quality || 'HD Trailer',
       isTrailer: true,
-      vjTracks: movie.vjTracks,
+      vjTracks: item.vjTracks,
       fileSizeMb: 45
     });
-    showToast(`Playing "${movie.title}" Trailer`);
+    showToast(`Playing "${item.title}" Trailer`);
   };
 
   const playEpisode = (show: TVShow, seasonNumber: number, episode: Episode, vjTrackId?: string) => {
@@ -1366,6 +1477,9 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         return;
       }
     }
+
+    // Increment real view count in Firebase (+1 on every Play / Watch Now)
+    void incrementMediaViews('tvshows', show.id);
 
     recordWatchHistory({
       id: episode.id,
@@ -1572,9 +1686,25 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     setSelectedShowForDetails(null);
   };
 
-  // 5-Star Rating System (synced with Firestore when permitted)
+  // Real 5-Star Rating System (1 rating per logged-in user per movie/show, saved to Firebase)
   const rateMovie = async (movieId: string, rating: number) => {
+    const raterKey = getActiveRaterKey();
+    if (!currentUser || !raterKey) {
+      showToast('Please log in to rate this movie.');
+      return;
+    }
+
     const clampedRating = Math.max(1, Math.min(5, Math.round(rating)));
+    const targetMovie = movies.find((m) => m.id === movieId);
+    if (!targetMovie) return;
+
+    const hadPrevious = targetMovie.ratingsByUser?.[raterKey] !== undefined;
+    const nextRatingsByUser: Record<string, number> = {
+      ...(targetMovie.ratingsByUser || {}),
+      [raterKey]: clampedRating,
+    };
+    const { rating5: newAvg, ratingsCount: newCount, rating10: newRating10 } =
+      computeRealRatingStats(nextRatingsByUser);
 
     setUserRatings((prev) => {
       const updated = { ...prev, [movieId]: clampedRating };
@@ -1584,45 +1714,29 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       return updated;
     });
 
-    const targetMovie = movies.find((m) => m.id === movieId);
-    if (!targetMovie) return;
-
-    const previousRating = targetMovie.userRating ?? userRatings[movieId];
-    const currentCount = targetMovie.ratingsCount ?? 0;
-    const currentAvg = targetMovie.rating5 ?? +(targetMovie.rating / 2).toFixed(1);
-
-    let newAvg: number;
-    let newCount: number;
-
-    if (previousRating !== undefined && currentCount > 0) {
-      const totalPoints = currentAvg * currentCount - previousRating + clampedRating;
-      newCount = currentCount;
-      newAvg = +(totalPoints / newCount).toFixed(1);
-    } else {
-      const totalPoints = currentAvg * currentCount + clampedRating;
-      newCount = currentCount + 1;
-      newAvg = +(totalPoints / newCount).toFixed(1);
-    }
-
-    newAvg = Math.max(1.0, Math.min(5.0, newAvg));
-    const newRating10 = +(newAvg * 2).toFixed(1);
-
     const updatedMovie: Movie = {
       ...targetMovie,
       rating5: newAvg,
       rating: newRating10,
       ratingsCount: newCount,
-      userRating: clampedRating
+      ratingsByUser: nextRatingsByUser,
+      userRating: clampedRating,
     };
 
     setMovies((prev) => prev.map((m) => (m.id === movieId ? updatedMovie : m)));
     if (selectedMovieForDetails?.id === movieId) {
       setSelectedMovieForDetails(updatedMovie);
     }
-    showToast(`You rated "${targetMovie.title}" ${clampedRating} stars! (Average: ★ ${newAvg.toFixed(1)}/5)`);
+
+    showToast(
+      hadPrevious
+        ? `Updated your rating to ${clampedRating}★ (Average: ${newAvg.toFixed(1)}/5)`
+        : `You rated "${targetMovie.title}" ${clampedRating}★ (Average: ${newAvg.toFixed(1)}/5)`
+    );
 
     try {
       await updateDoc(doc(db, 'movies', movieId), {
+        [`ratingsByUser.${raterKey}`]: clampedRating,
         rating: newRating10,
         rating5: newAvg,
         ratingsCount: newCount,
@@ -1633,8 +1747,66 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }
   };
 
-  const getUserRating = (movieId: string) => {
-    return userRatings[movieId];
+  const rateTVShow = async (showId: string, rating: number) => {
+    const raterKey = getActiveRaterKey();
+    if (!currentUser || !raterKey) {
+      showToast('Please log in to rate this TV show.');
+      return;
+    }
+
+    const clampedRating = Math.max(1, Math.min(5, Math.round(rating)));
+    const targetShow = tvShows.find((s) => s.id === showId);
+    if (!targetShow) return;
+
+    const hadPrevious = targetShow.ratingsByUser?.[raterKey] !== undefined;
+    const nextRatingsByUser: Record<string, number> = {
+      ...(targetShow.ratingsByUser || {}),
+      [raterKey]: clampedRating,
+    };
+    const { rating5: newAvg, ratingsCount: newCount, rating10: newRating10 } =
+      computeRealRatingStats(nextRatingsByUser);
+
+    const updatedShow: TVShow = {
+      ...targetShow,
+      rating5: newAvg,
+      rating: newRating10,
+      ratingsCount: newCount,
+      ratingsByUser: nextRatingsByUser,
+      userRating: clampedRating,
+    };
+
+    setTvShows((prev) => prev.map((s) => (s.id === showId ? updatedShow : s)));
+    if (selectedShowForDetails?.id === showId) {
+      setSelectedShowForDetails(updatedShow);
+    }
+
+    showToast(
+      hadPrevious
+        ? `Updated your rating to ${clampedRating}★ (Average: ${newAvg.toFixed(1)}/5)`
+        : `You rated "${targetShow.title}" ${clampedRating}★ (Average: ${newAvg.toFixed(1)}/5)`
+    );
+
+    try {
+      await updateDoc(doc(db, 'tvshows', showId), {
+        [`ratingsByUser.${raterKey}`]: clampedRating,
+        rating: newRating10,
+        rating5: newAvg,
+        ratingsCount: newCount,
+      });
+    } catch (error) {
+      const info = buildFirestoreErrorInfo(error, OperationType.UPDATE, `tvshows/${showId}`);
+      console.warn('TV Show rating Firestore sync skipped or denied:', JSON.stringify(info));
+    }
+  };
+
+  const getUserRating = (mediaId: string) => {
+    const raterKey = getActiveRaterKey();
+    if (!raterKey) return undefined;
+    const movieMatch = movies.find((m) => m.id === mediaId);
+    if (movieMatch) return movieMatch.ratingsByUser?.[raterKey];
+    const showMatch = tvShows.find((s) => s.id === mediaId);
+    if (showMatch) return showMatch.ratingsByUser?.[raterKey];
+    return undefined;
   };
 
   // Firebase Admin & Poster Authentication (Isolated adminAuth instance + invited Poster fallback)
@@ -1953,8 +2125,6 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }
 
     const descriptionText = (movieData.description || movieData.synopsis || '').trim();
-    const numericRating = Number(movieData.rating) || 8.0;
-    const rating5 = +(Math.min(5, Math.max(1, numericRating / 2))).toFixed(1);
     const vjTracks =
       movieData.vjTracks && movieData.vjTracks.length > 0
         ? movieData.vjTracks
@@ -1979,10 +2149,12 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       posterUrl: movieData.posterUrl.trim(),
       backdropUrl: (movieData.backdropUrl || movieData.posterUrl).trim(),
       videoUrl: movieData.videoUrl.trim(),
+      trailerUrl: (movieData.trailerUrl || '').trim(),
       year: Number(movieData.year) || new Date().getFullYear(),
-      rating: numericRating,
-      rating5,
+      rating: 0,
+      rating5: 0,
       ratingsCount: 0,
+      ratingsByUser: {},
       duration: movieData.duration || '1h 45m',
       ageRating: movieData.ageRating || '16+',
       quality: movieData.quality || '1080p FHD',
@@ -2023,7 +2195,6 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }
 
     const descriptionText = (updatedMovie.description || updatedMovie.synopsis || '').trim();
-    const numericRating = Number(updatedMovie.rating) || 8.0;
 
     try {
       await updateDoc(doc(adminAuth.currentUser ? adminDb : db, 'movies', updatedMovie.id), {
@@ -2034,9 +2205,8 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         posterUrl: updatedMovie.posterUrl.trim(),
         backdropUrl: (updatedMovie.backdropUrl || updatedMovie.posterUrl).trim(),
         videoUrl: updatedMovie.videoUrl.trim(),
+        trailerUrl: (updatedMovie.trailerUrl || '').trim(),
         year: Number(updatedMovie.year),
-        rating: numericRating,
-        rating5: +(Math.min(5, Math.max(1, numericRating / 2))).toFixed(1),
         duration: updatedMovie.duration,
         ageRating: updatedMovie.ageRating,
         quality: updatedMovie.quality,
@@ -2084,6 +2254,7 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const addEpisodeToShow = async (params: {
     showTitle: string;
     posterUrl?: string;
+    trailerUrl?: string;
     seasonNumber: number;
     episodeNumber: number;
     episodeTitle: string;
@@ -2148,16 +2319,25 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           updatedSeasons.sort((a, b) => a.seasonNumber - b.seasonNumber);
         }
 
-        await updateDoc(doc(targetDb, 'tvshows', existingShow.id), {
-          seasons: updatedSeasons
-        });
+        const updatePayload: Record<string, unknown> = {
+          seasons: updatedSeasons,
+        };
+        if (params.trailerUrl !== undefined && params.trailerUrl.trim()) {
+          updatePayload.trailerUrl = params.trailerUrl.trim();
+        }
+        await updateDoc(doc(targetDb, 'tvshows', existingShow.id), updatePayload);
         showToast(`Added Season ${params.seasonNumber} Ep ${params.episodeNumber} to "${existingShow.title}"`);
       } else {
         const newShowPayload = {
           title: normalizedTitle,
           genre: 'Drama',
           year: new Date().getFullYear(),
-          rating: 8.8,
+          rating: 0,
+          rating5: 0,
+          ratingsCount: 0,
+          ratingsByUser: {},
+          viewsCount: 0,
+          trailerUrl: (params.trailerUrl || '').trim(),
           ageRating: '16+',
           quality: '1080p FHD',
           posterUrl: params.posterUrl || '',
@@ -3451,6 +3631,7 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         openShowDetails,
         closeShowDetails,
         rateMovie,
+        rateTVShow,
         getUserRating,
         setOfflineMode,
         setCurrentUser,

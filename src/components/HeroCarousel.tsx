@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useMovieContext } from '../context/MovieContext';
-import { Play, Plus, Check, Info, Star, ChevronLeft, ChevronRight, Volume2, ShieldAlert } from 'lucide-react';
+import { Play, Plus, Check, Info, Star, ChevronLeft, ChevronRight, Volume2, ShieldAlert, Eye } from 'lucide-react';
 import { Movie } from '../types';
 
 export const HeroCarousel: React.FC = () => {
-  const { movies, playMovie, toggleWatchlist, isInWatchlist, openMovieDetails, offlineMode, downloads } = useMovieContext();
+  const { movies, playMovie, playTrailer, toggleWatchlist, isInWatchlist, openMovieDetails, offlineMode, downloads } = useMovieContext();
   
   // Select featured/trending movies, or fallback to latest uploaded movies
   const flaggedMovies = movies.filter((m) => m.isFeatured || m.isTrending);
@@ -25,6 +25,9 @@ export const HeroCarousel: React.FC = () => {
   const inWatchlist = isInWatchlist(currentMovie.id);
   const isDownloaded = downloads.some((d) => d.movieId === currentMovie.id && d.status === 'completed');
   const defaultVJ = currentMovie.vjTracks?.find((t) => t.isDefault) || currentMovie.vjTracks?.[0];
+  const hasRatings = (currentMovie.ratingsCount || 0) > 0 && (currentMovie.rating5 || 0) > 0;
+  const viewsCount = Math.max(0, Math.floor(currentMovie.viewsCount || 0));
+  const hasTrailer = Boolean(currentMovie.trailerUrl && currentMovie.trailerUrl.trim());
 
   const handleNext = () => {
     setCurrentIndex((prev) => (prev + 1) % featuredMovies.length);
@@ -58,9 +61,14 @@ export const HeroCarousel: React.FC = () => {
             <span className="bg-red-600 text-white font-bold px-2 py-0.5 rounded text-[11px] uppercase tracking-wider">
               {currentMovie.isUgandanExclusive ? 'Uganda Hit' : 'Trending Now'}
             </span>
-            <span className="text-amber-400 flex items-center gap-1 font-bold">
-              <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
-              {(currentMovie.rating5 ?? (currentMovie.rating / 2)).toFixed(1)} / 5
+            <span className="text-amber-400 flex items-center gap-1 font-bold tabular-nums">
+              <Star className={`w-3.5 h-3.5 ${hasRatings ? 'fill-amber-400 text-amber-400' : 'text-amber-400/70'}`} />
+              {hasRatings ? `${currentMovie.rating5!.toFixed(1)} / 5` : 'No ratings yet'}
+            </span>
+            <span>·</span>
+            <span className="flex items-center gap-1 text-gray-200 tabular-nums">
+              <Eye className="w-3.5 h-3.5 text-red-400" />
+              {viewsCount.toLocaleString()} {viewsCount === 1 ? 'view' : 'views'}
             </span>
             <span>·</span>
             <span>{currentMovie.year}</span>
@@ -108,6 +116,16 @@ export const HeroCarousel: React.FC = () => {
               <Play className="w-5 h-5 fill-white text-white" />
               Watch Now
             </button>
+
+            {hasTrailer && (
+              <button
+                onClick={() => playTrailer(currentMovie)}
+                className="flex items-center justify-center gap-2 px-4 sm:px-5 py-3 rounded-xl font-bold text-sm bg-black/70 hover:bg-red-950/80 text-white border border-red-500/50 hover:border-red-400 active:scale-95 transition-all whitespace-nowrap cursor-pointer"
+              >
+                <Play className="w-4 h-4 fill-red-400 text-red-400" />
+                Trailer
+              </button>
+            )}
 
             <button
               onClick={() => toggleWatchlist(currentMovie.id)}

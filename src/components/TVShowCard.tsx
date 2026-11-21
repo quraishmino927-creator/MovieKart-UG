@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { TVShow } from '../types';
 import { useMovieContext } from '../context/MovieContext';
-import { Play, Star, Plus, Check, Tv, Layers, Volume2 } from 'lucide-react';
+import { Play, Star, Plus, Check, Layers, Volume2, Eye } from 'lucide-react';
 
 interface TVShowCardProps {
   show: TVShow;
@@ -13,6 +13,9 @@ export const TVShowCard: React.FC<TVShowCardProps> = ({ show }) => {
   const inWatchlist = isInWatchlist(show.id);
   const totalEpisodes = show.seasons.reduce((acc, s) => acc + s.episodes.length, 0);
   const defaultVJ = show.vjTracks?.find((t) => t.isDefault) || show.vjTracks?.[0];
+  const ratingsCount = show.ratingsCount || 0;
+  const hasRatings = ratingsCount > 0 && (show.rating5 || 0) > 0;
+  const viewsCount = Math.max(0, Math.floor(show.viewsCount || 0));
 
   return (
     <div className="group relative flex flex-col rounded-2xl bg-[#121217] border border-white/5 hover:border-white/20 transition-all duration-300 overflow-hidden shadow-lg hover:shadow-2xl hover:shadow-black/60 hover:-translate-y-1">
@@ -39,10 +42,14 @@ export const TVShowCard: React.FC<TVShowCardProps> = ({ show }) => {
 
         {/* Top Badges */}
         <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between gap-1 pointer-events-none">
-          <span className="bg-black/75 backdrop-blur-md text-amber-400 font-bold text-[11px] px-2 py-0.5 rounded-md flex items-center gap-1 border border-white/10">
-            <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
-            {show.rating.toFixed(1)}
-          </span>
+          {hasRatings ? (
+            <span className="bg-black/75 backdrop-blur-md text-amber-400 font-bold text-[11px] px-2 py-0.5 rounded-md flex items-center gap-1 border border-white/10 tabular-nums">
+              <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
+              {show.rating5!.toFixed(1)}
+            </span>
+          ) : (
+            <span />
+          )}
 
           <span className="bg-black/75 backdrop-blur-md text-gray-200 text-[10px] font-semibold px-1.5 py-0.5 rounded border border-white/10 uppercase">
             {show.quality}
@@ -112,6 +119,22 @@ export const TVShowCard: React.FC<TVShowCardProps> = ({ show }) => {
           >
             {show.title}
           </h3>
+
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-gray-400 mt-1 tabular-nums">
+            <span className="inline-flex items-center gap-1 text-gray-300">
+              <Eye className="w-3 h-3 text-red-400 shrink-0" />
+              <span>{viewsCount.toLocaleString()} {viewsCount === 1 ? 'view' : 'views'}</span>
+            </span>
+            <span className="text-gray-600">·</span>
+            {hasRatings ? (
+              <span className="inline-flex items-center gap-0.5 text-amber-400 font-bold">
+                <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
+                <span>{show.rating5!.toFixed(1)}</span>
+              </span>
+            ) : (
+              <span className="text-[10px] text-gray-400">No ratings yet</span>
+            )}
+          </div>
         </div>
 
         {defaultVJ && (

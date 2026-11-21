@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Movie } from '../types';
 import { useMovieContext } from '../context/MovieContext';
-import { Play, Star, Plus, Check, Download, CheckCircle2, Loader2, Volume2, Info } from 'lucide-react';
+import { Play, Star, Plus, Check, Download, CheckCircle2, Loader2, Volume2, Info, Eye } from 'lucide-react';
 
 interface MovieCardProps {
   movie: Movie;
@@ -25,8 +25,11 @@ export const MovieCard: React.FC<MovieCardProps> = ({ movie }) => {
   const isDownloading = downloadInfo?.status === 'downloading';
   const defaultVJ = movie.vjTracks?.find((t) => t.isDefault) || movie.vjTracks?.[0];
 
-  // 5-Star scale average
-  const displayRating5 = movie.rating5 ?? +(movie.rating / 2).toFixed(1);
+  // Real 5-Star rating & views (strictly start at 0 — no fake fallbacks)
+  const ratingsCount = movie.ratingsCount || 0;
+  const hasRatings = ratingsCount > 0 && (movie.rating5 || 0) > 0;
+  const displayRating5 = hasRatings ? (movie.rating5 as number) : 0;
+  const viewsCount = Math.max(0, Math.floor(movie.viewsCount || 0));
 
   return (
     <div className="group relative flex flex-col rounded-2xl bg-[#121217] border border-white/5 hover:border-white/20 transition-all duration-300 overflow-hidden shadow-lg hover:shadow-2xl hover:shadow-black/60 hover:-translate-y-1">
@@ -51,15 +54,16 @@ export const MovieCard: React.FC<MovieCardProps> = ({ movie }) => {
           </div>
         )}
 
-        {/* Top Badges: Average 5-Star Rating & Quality */}
+        {/* Top Badges: Real 5-Star Rating (only if rated) & Quality */}
         <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between gap-1 pointer-events-none">
-          <span className="bg-black/85 backdrop-blur-md text-amber-400 font-bold text-[11px] px-2 py-0.5 rounded-md flex items-center gap-1 border border-white/10 shadow-sm">
-            <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
-            <span>{displayRating5.toFixed(1)}</span>
-            {movie.userRating && (
-              <span className="text-[9px] text-amber-300 font-normal">({movie.userRating}★)</span>
-            )}
-          </span>
+          {hasRatings ? (
+            <span className="bg-black/85 backdrop-blur-md text-amber-400 font-bold text-[11px] px-2 py-0.5 rounded-md flex items-center gap-1 border border-white/10 shadow-sm tabular-nums">
+              <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
+              <span>{displayRating5.toFixed(1)}</span>
+            </span>
+          ) : (
+            <span />
+          )}
 
           <span className="bg-black/75 backdrop-blur-md text-gray-200 text-[10px] font-semibold px-1.5 py-0.5 rounded border border-white/10 uppercase">
             {movie.quality}
@@ -181,21 +185,21 @@ export const MovieCard: React.FC<MovieCardProps> = ({ movie }) => {
             {movie.title}
           </h3>
 
-          {/* Average 5-Star Rating in Card Body */}
-          <div className="flex items-center gap-1 text-[11px] text-gray-400 mt-1">
-            <div className="flex items-center text-amber-400 font-bold">
-              <Star className="w-3 h-3 fill-amber-400 text-amber-400 inline mr-0.5" />
-              <span>{displayRating5.toFixed(1)}</span>
-              <span className="text-gray-500 font-normal text-[10px] ml-0.5">/5</span>
-            </div>
-            <span className="text-gray-600">·</span>
-            <span className="text-[10px] text-gray-400 font-mono">
-              {movie.ratingsCount || 120} reviews
+          {/* Real Views & Real Rating in Card Body */}
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-gray-400 mt-1 tabular-nums">
+            <span className="inline-flex items-center gap-1 text-gray-300">
+              <Eye className="w-3 h-3 text-red-400 shrink-0" />
+              <span>{viewsCount.toLocaleString()} {viewsCount === 1 ? 'view' : 'views'}</span>
             </span>
-            {movie.userRating && (
-              <span className="ml-auto text-[9px] bg-amber-500/15 text-amber-300 border border-amber-500/30 px-1 py-0.2 rounded font-semibold">
-                You: {movie.userRating}★
+            <span className="text-gray-600">·</span>
+            {hasRatings ? (
+              <span className="inline-flex items-center gap-0.5 text-amber-400 font-bold">
+                <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
+                <span>{displayRating5.toFixed(1)}</span>
+                <span className="text-gray-400 font-normal text-[10px]">({ratingsCount})</span>
               </span>
+            ) : (
+              <span className="text-[10px] text-gray-400">No ratings yet</span>
             )}
           </div>
         </div>

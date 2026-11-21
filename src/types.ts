@@ -100,8 +100,9 @@ export interface Movie {
   vjName?: string;
   vjTracks: VJTrack[];
   viewsCount?: number;
-  rating5?: number; // 5-star scale average rating (1.0 - 5.0)
-  ratingsCount?: number; // total ratings submitted
+  rating5?: number; // 5-star scale average rating (real user ratings only, 0 when unrated)
+  ratingsCount?: number; // total real ratings submitted
+  ratingsByUser?: Record<string, number>; // real 1-5 ratings keyed by user id
   userRating?: number; // rating submitted by current user (1 - 5)
   createdAt?: number;
   createdBy?: string;
@@ -144,12 +145,25 @@ export interface TVShow {
   vjTracks: VJTrack[];
   seasonsCount?: number;
   seasons: Season[];
+  trailerUrl?: string;
   viewsCount?: number;
   rating5?: number;
   ratingsCount?: number;
+  ratingsByUser?: Record<string, number>;
   userRating?: number;
   createdBy?: string;
   createdByEmail?: string;
+}
+
+export interface MovieComment {
+  id: string;
+  mediaId: string;
+  mediaType: 'movie' | 'tvshow';
+  userId: string;
+  userName: string;
+  userAvatar: string;
+  text: string;
+  createdAt: number;
 }
 
 export interface PlayableItem {

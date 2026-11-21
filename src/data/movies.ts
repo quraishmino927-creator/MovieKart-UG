@@ -7,7 +7,7 @@ export const INITIAL_MOVIES: Movie[] = [
     genre: 'Ugandan Hits',
     year: 2024,
     duration: '1h 24m',
-    rating: 9.2,
+    rating: 0,
     ageRating: '16+',
     quality: '1080p FHD',
     posterUrl: 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?auto=format&fit=crop&w=800&q=80',
@@ -21,7 +21,7 @@ export const INITIAL_MOVIES: Movie[] = [
     isTrending: true,
     isFeatured: true,
     isUgandanExclusive: true,
-    viewsCount: 148200,
+    viewsCount: 0,
     vjTracks: [
       {
         id: 'vj1',
@@ -61,7 +61,7 @@ export const INITIAL_MOVIES: Movie[] = [
     genre: 'Sci-Fi',
     year: 2025,
     duration: '1h 52m',
-    rating: 8.9,
+    rating: 0,
     ageRating: '16+',
     quality: '4K UHD',
     posterUrl: 'https://images.unsplash.com/photo-1578632767115-351597cf2477?auto=format&fit=crop&w=800&q=80',
@@ -73,7 +73,7 @@ export const INITIAL_MOVIES: Movie[] = [
     fileSizeMb: 680,
     isTrending: true,
     isFeatured: true,
-    viewsCount: 98400,
+    viewsCount: 0,
     vjTracks: [
       {
         id: 'vj-jun',
@@ -100,7 +100,7 @@ export const INITIAL_MOVIES: Movie[] = [
     genre: 'Action',
     year: 2024,
     duration: '1h 38m',
-    rating: 8.7,
+    rating: 0,
     ageRating: '16+',
     quality: '1080p FHD',
     posterUrl: 'https://images.unsplash.com/photo-1568605117036-5fe5e7bab0b7?auto=format&fit=crop&w=800&q=80',
@@ -113,7 +113,7 @@ export const INITIAL_MOVIES: Movie[] = [
     isTrending: true,
     isFeatured: false,
     isUgandanExclusive: true,
-    viewsCount: 81200,
+    viewsCount: 0,
     vjTracks: [
       {
         id: 'vj-jun',
@@ -140,7 +140,7 @@ export const INITIAL_MOVIES: Movie[] = [
     genre: 'Comedy',
     year: 2023,
     duration: '1h 15m',
-    rating: 8.4,
+    rating: 0,
     ageRating: 'PG',
     quality: '4K UHD',
     posterUrl: 'https://images.unsplash.com/photo-1534447677768-be436bb09401?auto=format&fit=crop&w=800&q=80',
@@ -152,7 +152,7 @@ export const INITIAL_MOVIES: Movie[] = [
     fileSizeMb: 360,
     isTrending: true,
     isFeatured: false,
-    viewsCount: 112000,
+    viewsCount: 0,
     vjTracks: [
       {
         id: 'vj-emmy',
@@ -179,7 +179,7 @@ export const INITIAL_MOVIES: Movie[] = [
     genre: 'Drama',
     year: 2024,
     duration: '2h 10m',
-    rating: 9.0,
+    rating: 0,
     ageRating: '13+',
     quality: '4K UHD',
     posterUrl: 'https://images.unsplash.com/photo-1518173946687-a4c8a383392e?auto=format&fit=crop&w=800&q=80',
@@ -192,7 +192,7 @@ export const INITIAL_MOVIES: Movie[] = [
     isTrending: false,
     isFeatured: true,
     isUgandanExclusive: true,
-    viewsCount: 64200,
+    viewsCount: 0,
     vjTracks: [
       {
         id: 'vj-jingo',
@@ -219,7 +219,7 @@ export const INITIAL_MOVIES: Movie[] = [
     genre: 'Sci-Fi',
     year: 2023,
     duration: '1h 32m',
-    rating: 8.8,
+    rating: 0,
     ageRating: '13+',
     quality: '1080p FHD',
     posterUrl: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?auto=format&fit=crop&w=800&q=80',
@@ -231,7 +231,7 @@ export const INITIAL_MOVIES: Movie[] = [
     fileSizeMb: 490,
     isTrending: true,
     isFeatured: false,
-    viewsCount: 75400,
+    viewsCount: 0,
     vjTracks: [
       {
         id: 'vj-junior',
@@ -258,7 +258,7 @@ export const INITIAL_MOVIES: Movie[] = [
     genre: 'Comedy',
     year: 2024,
     duration: '1h 28m',
-    rating: 8.6,
+    rating: 0,
     ageRating: 'PG',
     quality: '1080p FHD',
     posterUrl: 'https://images.unsplash.com/photo-1543610892-0b1f7e6d8ac1?auto=format&fit=crop&w=800&q=80',
@@ -271,7 +271,7 @@ export const INITIAL_MOVIES: Movie[] = [
     isTrending: false,
     isFeatured: false,
     isUgandanExclusive: true,
-    viewsCount: 52100,
+    viewsCount: 0,
     vjTracks: [
       {
         id: 'vj-emmy',
@@ -292,7 +292,7 @@ export const INITIAL_MOVIES: Movie[] = [
     genre: 'Thriller',
     year: 2025,
     duration: '1h 45m',
-    rating: 8.5,
+    rating: 0,
     ageRating: '16+',
     quality: '4K UHD',
     posterUrl: 'https://images.unsplash.com/photo-1509198397868-475647b2a1e5?auto=format&fit=crop&w=800&q=80',
@@ -304,7 +304,7 @@ export const INITIAL_MOVIES: Movie[] = [
     fileSizeMb: 530,
     isTrending: true,
     isFeatured: false,
-    viewsCount: 88100,
+    viewsCount: 0,
     vjTracks: [
       {
         id: 'vj-jun',
@@ -325,7 +325,7 @@ export const INITIAL_MOVIES: Movie[] = [
     genre: 'Sci-Fi',
     year: 2023,
     duration: '1h 22m',
-    rating: 8.3,
+    rating: 0,
     ageRating: '13+',
     quality: '1080p FHD',
     posterUrl: 'https://images.unsplash.com/photo-1550745165-9bc0b252726f?auto=format&fit=crop&w=800&q=80',
@@ -337,7 +337,7 @@ export const INITIAL_MOVIES: Movie[] = [
     fileSizeMb: 450,
     isTrending: false,
     isFeatured: false,
-    viewsCount: 41200,
+    viewsCount: 0,
     vjTracks: [
       {
         id: 'vj-jun',
@@ -357,7 +357,7 @@ export const INITIAL_MOVIES: Movie[] = [
     genre: 'Ugandan Hits',
     year: 2024,
     duration: '1h 55m',
-    rating: 8.9,
+    rating: 0,
     ageRating: '18+',
     quality: '4K UHD',
     posterUrl: 'https://images.unsplash.com/photo-1485846234645-a62644f84728?auto=format&fit=crop&w=800&q=80',
@@ -370,7 +370,7 @@ export const INITIAL_MOVIES: Movie[] = [
     isTrending: true,
     isFeatured: true,
     isUgandanExclusive: true,
-    viewsCount: 132400,
+    viewsCount: 0,
     vjTracks: [
       {
         id: 'vj-jun',
@@ -397,7 +397,7 @@ export const INITIAL_MOVIES: Movie[] = [
     genre: 'Action',
     year: 2025,
     duration: '2h 04m',
-    rating: 8.7,
+    rating: 0,
     ageRating: '16+',
     quality: '4K UHD',
     posterUrl: 'https://images.unsplash.com/photo-1509198397868-475647b2a1e5?auto=format&fit=crop&w=800&q=80',
@@ -409,7 +409,7 @@ export const INITIAL_MOVIES: Movie[] = [
     fileSizeMb: 640,
     isTrending: true,
     isFeatured: false,
-    viewsCount: 79200,
+    viewsCount: 0,
     vjTracks: [
       {
         id: 'vj-jun',
@@ -430,7 +430,7 @@ export const INITIAL_MOVIES: Movie[] = [
     genre: 'Comedy',
     year: 2024,
     duration: '1h 35m',
-    rating: 8.5,
+    rating: 0,
     ageRating: 'PG',
     quality: '1080p FHD',
     posterUrl: 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?auto=format&fit=crop&w=800&q=80',
@@ -443,7 +443,7 @@ export const INITIAL_MOVIES: Movie[] = [
     isTrending: false,
     isFeatured: false,
     isUgandanExclusive: true,
-    viewsCount: 94100,
+    viewsCount: 0,
     vjTracks: [
       {
         id: 'vj-emmy',

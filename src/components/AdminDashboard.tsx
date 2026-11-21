@@ -153,7 +153,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ portalMode = 'ad
     genre: 'Action' as Genre,
     year: new Date().getFullYear(),
     duration: '1h 45m',
-    rating: 8.5,
+    rating: 0,
     ageRating: '16+' as '13+' | '16+' | '18+' | 'PG',
     quality: '1080p FHD' as '4K UHD' | '1080p FHD' | '720p HD',
     posterUrl: '',
@@ -162,6 +162,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ portalMode = 'ad
     director: '',
     cast: '',
     videoUrl: '',
+    trailerUrl: '',
     fileSizeMb: 450,
     isTrending: false,
     isFeatured: true,
@@ -179,6 +180,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ portalMode = 'ad
     episodeNumber: 1,
     episodeTitle: '',
     videoUrl: '',
+    trailerUrl: '',
     duration: '42m',
     synopsis: ''
   });
@@ -521,7 +523,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ portalMode = 'ad
       genre: movie.genre,
       year: movie.year,
       duration: movie.duration,
-      rating: movie.rating,
+      rating: movie.rating || 0,
       ageRating: movie.ageRating,
       quality: movie.quality,
       posterUrl: movie.posterUrl,
@@ -530,6 +532,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ portalMode = 'ad
       director: movie.director,
       cast: movie.cast.join(', '),
       videoUrl: movie.videoUrl,
+      trailerUrl: movie.trailerUrl || '',
       fileSizeMb: movie.fileSizeMb,
       isTrending: !!movie.isTrending,
       isFeatured: !!movie.isFeatured,
@@ -564,7 +567,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ portalMode = 'ad
           genre: movieForm.genre,
           year: Number(movieForm.year),
           duration: movieForm.duration,
-          rating: Number(movieForm.rating),
+          rating: Number(movieForm.rating || 0),
           ageRating: movieForm.ageRating,
           quality: movieForm.quality,
           posterUrl: movieForm.posterUrl,
@@ -577,6 +580,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ portalMode = 'ad
             .map((c) => c.trim())
             .filter(Boolean),
           videoUrl: movieForm.videoUrl,
+          trailerUrl: movieForm.trailerUrl.trim(),
           fileSizeMb: Number(movieForm.fileSizeMb),
           isTrending: movieForm.isTrending,
           isFeatured: movieForm.isFeatured,
@@ -589,7 +593,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ portalMode = 'ad
           genre: movieForm.genre,
           year: Number(movieForm.year),
           duration: movieForm.duration,
-          rating: Number(movieForm.rating),
+          rating: 0,
           ageRating: movieForm.ageRating,
           quality: movieForm.quality,
           posterUrl: movieForm.posterUrl,
@@ -602,6 +606,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ portalMode = 'ad
             .map((c) => c.trim())
             .filter(Boolean),
           videoUrl: movieForm.videoUrl,
+          trailerUrl: movieForm.trailerUrl.trim(),
           fileSizeMb: Number(movieForm.fileSizeMb),
           isTrending: movieForm.isTrending,
           isFeatured: movieForm.isFeatured,
@@ -636,6 +641,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ portalMode = 'ad
         episodeNumber: Number(tvShowForm.episodeNumber),
         episodeTitle: tvShowForm.episodeTitle,
         videoUrl: tvShowForm.videoUrl,
+        trailerUrl: tvShowForm.trailerUrl.trim(),
         duration: tvShowForm.duration,
         synopsis: tvShowForm.synopsis
       });
@@ -647,6 +653,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ portalMode = 'ad
         episodeNumber: 1,
         episodeTitle: '',
         videoUrl: '',
+        trailerUrl: '',
         duration: '42m',
         synopsis: ''
       });
@@ -1117,6 +1124,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ portalMode = 'ad
                                       episodeNumber: (s.seasons[s.seasons.length - 1]?.episodes.length || 0) + 1,
                                       episodeTitle: '',
                                       videoUrl: '',
+                                      trailerUrl: s.trailerUrl || '',
                                       duration: '45m',
                                       synopsis: ''
                                     });
@@ -1415,11 +1423,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ portalMode = 'ad
                       </td>
 
                       <td className="py-3 px-4">
-                        <span className="text-amber-400 font-bold flex items-center gap-1">
-                          <Star className="w-3.5 h-3.5 fill-amber-400" />
-                          <span>{(m.rating5 ?? m.rating / 2).toFixed(1)}/5</span>
-                          <span className="text-[10px] text-gray-500 font-normal">({m.ratingsCount || 0})</span>
-                        </span>
+                        {(m.ratingsCount || 0) > 0 && (m.rating5 || 0) > 0 ? (
+                          <span className="text-amber-400 font-bold flex items-center gap-1">
+                            <Star className="w-3.5 h-3.5 fill-amber-400" />
+                            <span>{(m.rating5 || 0).toFixed(1)}/5</span>
+                            <span className="text-[10px] text-gray-500 font-normal">({m.ratingsCount})</span>
+                          </span>
+                        ) : (
+                          <span className="text-[11px] text-gray-500">No ratings yet</span>
+                        )}
+                        <p className="text-[10px] text-gray-500 mt-0.5 tabular-nums">
+                          {Math.max(0, Math.floor(m.viewsCount || 0)).toLocaleString()}{' '}
+                          {Math.max(0, Math.floor(m.viewsCount || 0)) === 1 ? 'view' : 'views'}
+                        </p>
                       </td>
 
                       <td className="py-3 px-4">
@@ -1573,6 +1589,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ portalMode = 'ad
                                   episodeNumber: (s.seasons[s.seasons.length - 1]?.episodes.length || 0) + 1,
                                   episodeTitle: '',
                                   videoUrl: '',
+                                  trailerUrl: s.trailerUrl || '',
                                   duration: '45m',
                                   synopsis: ''
                                 });
@@ -2249,19 +2266,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ portalMode = 'ad
                 </div>
 
                 <div>
-                  <label className="block text-gray-300 font-semibold mb-1">
-                    Rating (1.0 - 10.0) <span className="text-red-500">*</span>
+                  <label className="block text-gray-400 font-medium mb-1">
+                    Viewer Rating
                   </label>
-                  <input
-                    type="number"
-                    step="0.1"
-                    min="1"
-                    max="10"
-                    required
-                    value={movieForm.rating}
-                    onChange={(e) => setMovieForm({ ...movieForm, rating: Number(e.target.value) })}
-                    className="w-full bg-[#181822] text-white p-2.5 rounded-xl border border-white/10 focus:outline-none focus:border-[#E50914]"
-                  />
+                  <div className="w-full bg-[#181822]/70 text-gray-400 p-2.5 rounded-xl border border-white/10 text-xs">
+                    {editingMovie && (editingMovie.ratingsCount || 0) > 0
+                      ? `★ ${(editingMovie.rating5 || 0).toFixed(1)}/5 (${editingMovie.ratingsCount})`
+                      : 'Starts at 0 (viewer-rated)'}
+                  </div>
                 </div>
 
                 <div>
@@ -2391,6 +2403,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ portalMode = 'ad
                     className="w-full bg-black/50 text-white p-2 rounded-xl border border-white/10 focus:outline-none focus:border-[#E50914] font-mono text-[11px]"
                   />
                 </div>
+              </div>
+
+              {/* Optional Trailer URL */}
+              <div className="p-3.5 rounded-2xl bg-[#181822] border border-white/10 space-y-2">
+                <label className="block text-gray-200 font-bold">
+                  Trailer URL <span className="text-gray-400 font-normal">(Optional — YouTube or Video Link)</span>
+                </label>
+                <input
+                  type="url"
+                  value={movieForm.trailerUrl}
+                  onChange={(e) => setMovieForm({ ...movieForm, trailerUrl: e.target.value })}
+                  placeholder="https://www.youtube.com/watch?v=... or direct MP4 link"
+                  className="w-full bg-black/50 text-white p-2 rounded-xl border border-white/10 focus:outline-none focus:border-[#E50914] font-mono text-[11px]"
+                />
+                <p className="text-[10px] text-gray-500">
+                  Leave empty to hide the Trailer button for this movie.
+                </p>
               </div>
 
               {/* Description */}
@@ -2618,6 +2647,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ portalMode = 'ad
                   placeholder="https://firebasestorage.googleapis.com/..."
                   className="w-full bg-black/50 text-white p-2 rounded-lg border border-white/10 focus:outline-none focus:border-[#E50914] font-mono text-[11px]"
                 />
+              </div>
+
+              <div className="p-3 rounded-xl bg-[#181822] border border-white/10 space-y-1.5">
+                <label className="block text-gray-300 font-semibold">
+                  Show Trailer URL <span className="text-gray-400 font-normal">(Optional — YouTube or Video Link)</span>
+                </label>
+                <input
+                  type="url"
+                  value={tvShowForm.trailerUrl}
+                  onChange={(e) => setTvShowForm({ ...tvShowForm, trailerUrl: e.target.value })}
+                  placeholder="https://www.youtube.com/watch?v=... or direct MP4 link"
+                  className="w-full bg-black/50 text-white p-2 rounded-lg border border-white/10 focus:outline-none focus:border-[#E50914] font-mono text-[11px]"
+                />
+                <p className="text-[10px] text-gray-500">
+                  Leave empty to hide the Trailer button for this TV show.
+                </p>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

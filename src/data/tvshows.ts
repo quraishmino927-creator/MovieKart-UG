@@ -6,7 +6,7 @@ export const INITIAL_TV_SHOWS: TVShow[] = [
     title: 'Kampala Hustle: The Series',
     genre: 'Ugandan Hits',
     year: 2024,
-    rating: 9.3,
+    rating: 0,
     ageRating: '16+',
     quality: '4K UHD',
     posterUrl: 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?auto=format&fit=crop&w=800&q=80',
@@ -17,7 +17,7 @@ export const INITIAL_TV_SHOWS: TVShow[] = [
     isTrending: true,
     isFeatured: true,
     isUgandanExclusive: true,
-    viewsCount: 215400,
+    viewsCount: 0,
     vjTracks: [
       {
         id: 'vj1',
@@ -128,7 +128,7 @@ export const INITIAL_TV_SHOWS: TVShow[] = [
     title: 'Wakaliwood Commandos',
     genre: 'Action',
     year: 2024,
-    rating: 9.1,
+    rating: 0,
     ageRating: '16+',
     quality: '1080p FHD',
     posterUrl: 'https://images.unsplash.com/photo-1509198397868-475647b2a1e5?auto=format&fit=crop&w=800&q=80',
@@ -139,7 +139,7 @@ export const INITIAL_TV_SHOWS: TVShow[] = [
     isTrending: true,
     isFeatured: true,
     isUgandanExclusive: true,
-    viewsCount: 184000,
+    viewsCount: 0,
     vjTracks: [
       {
         id: 'vj_emmie',
@@ -219,7 +219,7 @@ export const INITIAL_TV_SHOWS: TVShow[] = [
     title: 'Cyber Void 2099',
     genre: 'Sci-Fi',
     year: 2025,
-    rating: 8.9,
+    rating: 0,
     ageRating: '16+',
     quality: '4K UHD',
     posterUrl: 'https://images.unsplash.com/photo-1578632767115-351597cf2477?auto=format&fit=crop&w=800&q=80',
@@ -229,7 +229,7 @@ export const INITIAL_TV_SHOWS: TVShow[] = [
     cast: ['Maurice Kirya', 'Gladys Oyenbot', 'Michael Wawuyo Jr.'],
     isTrending: true,
     isFeatured: false,
-    viewsCount: 96200,
+    viewsCount: 0,
     vjTracks: [
       {
         id: 'vj_jun',
@@ -289,7 +289,7 @@ export const INITIAL_TV_SHOWS: TVShow[] = [
     title: 'Boda Boda Diaries',
     genre: 'Comedy',
     year: 2024,
-    rating: 8.8,
+    rating: 0,
     ageRating: 'PG',
     quality: '1080p FHD',
     posterUrl: 'https://images.unsplash.com/photo-1543610892-0b1f7e6d8ac1?auto=format&fit=crop&w=800&q=80',
@@ -300,7 +300,7 @@ export const INITIAL_TV_SHOWS: TVShow[] = [
     isTrending: false,
     isFeatured: false,
     isUgandanExclusive: true,
-    viewsCount: 114500,
+    viewsCount: 0,
     vjTracks: [
       {
         id: 'vj_emmy',
@@ -360,7 +360,7 @@ export const INITIAL_TV_SHOWS: TVShow[] = [
     title: 'The Pearl Horizon: Chronicles',
     genre: 'Drama',
     year: 2024,
-    rating: 9.0,
+    rating: 0,
     ageRating: '13+',
     quality: '4K UHD',
     posterUrl: 'https://images.unsplash.com/photo-1518173946687-a4c8a383392e?auto=format&fit=crop&w=800&q=80',
@@ -371,7 +371,7 @@ export const INITIAL_TV_SHOWS: TVShow[] = [
     isTrending: false,
     isFeatured: false,
     isUgandanExclusive: true,
-    viewsCount: 78900,
+    viewsCount: 0,
     vjTracks: [
       {
         id: 'vj_jingo',
