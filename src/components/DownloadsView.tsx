@@ -1,6 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { useMovieContext } from '../context/MovieContext';
-import { formatBytes } from '../lib/offlineDownloads';
+import {
+  formatBytes,
+  pickAndLinkDeviceFolder,
+  unlinkDeviceFolder,
+  requestPersistentStorage
+} from '../lib/offlineDownloads';
 import {
   DownloadCloud,
   Play,
@@ -14,8 +19,11 @@ import {
   AlertTriangle,
   Smartphone,
   FolderDown,
+  FolderOpen,
   RefreshCw,
-  ShieldCheck
+  ShieldCheck,
+  Database,
+  X
 } from 'lucide-react';
 
 export const DownloadsView: React.FC = () => {
@@ -36,12 +44,14 @@ export const DownloadsView: React.FC = () => {
   } = useMovieContext();
 
   const [refreshingStorage, setRefreshingStorage] = useState(false);
+  const [linkingFolder, setLinkingFolder] = useState(false);
+  const [requestingPersist, setRequestingPersist] = useState(false);
   const [exportingId, setExportingId] = useState<string | null>(null);
 
-  // Measure real phone storage whenever the Downloads screen opens
+  // Measure real phone storage whenever DownloadsView mounts or completed downloads change
   useEffect(() => {
     void refreshDeviceStorage();
-  }, [refreshDeviceStorage]);
+  }, [refreshDeviceStorage, downloads.length]);
 
   const completedDownloads = downloads.filter((d) => d.status === 'completed');
   const verifiedOfflineDownloads = completedDownloads.filter((d) => d.hasLocalBlob);
@@ -49,20 +59,71 @@ export const DownloadsView: React.FC = () => {
     (d) => d.status === 'downloading' || d.status === 'paused' || d.status === 'error'
   );
 
-  // Real phone storage readings from navigator.storage.estimate() + IndexedDB exact bytes
+  // Real File System Access API (OPFS) + Web Storage API readings
   const moviesBytes = deviceStorage?.moviesBytes ?? 0;
+  const webAndCacheBytes =
+    (deviceStorage?.webStorageBytes ?? 0) + (deviceStorage?.cacheStorageBytes ?? 0);
   const appUsageBytes = deviceStorage?.appUsageBytes ?? moviesBytes;
   const deviceQuotaBytes = deviceStorage?.deviceQuotaBytes ?? 0;
   const availableBytes = deviceStorage?.availableBytes ?? 0;
   const percentUsed = deviceStorage?.percentUsed ?? 0;
+  const linkedFolder = deviceStorage?.linkedFolder ?? null;
+
+  const moviesQuotaPercent =
+    deviceQuotaBytes > 0 ? Math.min(100, (moviesBytes / deviceQuotaBytes) * 100) : 0;
+  const otherAppBytes = Math.max(0, appUsageBytes - moviesBytes);
+  const otherQuotaPercent =
+    deviceQuotaBytes > 0
+      ? Math.min(Math.max(0, 100 - moviesQuotaPercent), (otherAppBytes / deviceQuotaBytes) * 100)
+      : 0;
 
   const handleRefreshStorage = async () => {
     setRefreshingStorage(true);
     try {
       await refreshDeviceStorage();
-      showToast('Phone storage measurement updated');
+      showToast('Phone storage usage refreshed');
     } finally {
       setRefreshingStorage(false);
+    }
+  };
+
+  const handleLinkDeviceFolder = async () => {
+    setLinkingFolder(true);
+    try {
+      const folderInfo = await pickAndLinkDeviceFolder();
+      if (folderInfo) {
+        await refreshDeviceStorage();
+        showToast(
+          `Linked "${folderInfo.folderName}" — ${folderInfo.videoFilesCount} video${
+            folderInfo.videoFilesCount === 1 ? '' : 's'
+          } (${formatBytes(folderInfo.videoBytes)})`
+        );
+      }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Could not access device folder.');
+    } finally {
+      setLinkingFolder(false);
+    }
+  };
+
+  const handleUnlinkFolder = async () => {
+    unlinkDeviceFolder();
+    await refreshDeviceStorage();
+    showToast('Device folder unlinked');
+  };
+
+  const handleProtectStorage = async () => {
+    setRequestingPersist(true);
+    try {
+      const granted = await requestPersistentStorage();
+      await refreshDeviceStorage();
+      showToast(
+        granted
+          ? 'Persistent phone storage enabled — OS will protect your offline movies.'
+          : 'Browser manages storage persistence automatically on this device.'
+      );
+    } finally {
+      setRequestingPersist(false);
     }
   };
 
@@ -70,6 +131,7 @@ export const DownloadsView: React.FC = () => {
     setExportingId(movieId);
     try {
       await saveDownloadToGallery(movieId);
+      await refreshDeviceStorage();
     } finally {
       setExportingId(null);
     }
@@ -125,68 +187,219 @@ export const DownloadsView: React.FC = () => {
         </div>
       </div>
 
-      {/* Real Phone Storage Card */}
-      <div className="p-4 sm:p-5 rounded-2xl bg-[#121217] border border-white/5 space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-2 text-xs sm:text-sm font-medium">
-          <div className="flex items-center gap-2 text-gray-200">
+      {/* Real Phone Storage Tracker (File System Access API + Web Storage API) */}
+      <div className="p-4 sm:p-5 rounded-2xl bg-[#121217] border border-white/5 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-2.5">
+          <div className="flex flex-wrap items-center gap-2 text-gray-200">
             <HardDrive className="w-4 h-4 text-red-500 shrink-0" />
-            <span className="font-bold">Real Phone Storage</span>
-            {deviceStorage?.isPersisted && (
+            <span className="text-xs sm:text-sm font-bold">Real Phone Storage Usage</span>
+            {deviceStorage && (
+              <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-gray-300 bg-white/5 border border-white/10 px-2 py-0.5 rounded-md">
+                <Database className="w-3 h-3 text-red-400" />
+                {deviceStorage.activeEngine}
+              </span>
+            )}
+            {deviceStorage?.isPersisted ? (
               <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/25 px-2 py-0.5 rounded-md">
                 <ShieldCheck className="w-3 h-3" />
                 Protected
               </span>
+            ) : (
+              <button
+                type="button"
+                onClick={handleProtectStorage}
+                disabled={requestingPersist}
+                className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 px-2 py-0.5 rounded-md transition-colors cursor-pointer"
+                title="Ask the phone OS to keep downloaded movies protected from automatic cleanup"
+              >
+                <ShieldCheck className="w-3 h-3" />
+                {requestingPersist ? 'Requesting...' : 'Protect Storage'}
+              </button>
             )}
           </div>
 
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2">
+            {deviceStorage?.directoryPickerSupported && !linkedFolder && (
+              <button
+                type="button"
+                onClick={handleLinkDeviceFolder}
+                disabled={linkingFolder}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-gray-200 border border-white/10 text-[11px] font-semibold transition-colors cursor-pointer"
+                title="Select a real folder on your phone/device using the File System Access API"
+              >
+                <FolderOpen className="w-3.5 h-3.5 text-red-400" />
+                <span>{linkingFolder ? 'Opening...' : 'Scan Phone Folder'}</span>
+              </button>
+            )}
+
             <span className="text-white font-bold font-mono text-xs sm:text-sm">
               {formatBytes(appUsageBytes)}
               {deviceQuotaBytes > 0 ? ` / ${formatBytes(deviceQuotaBytes)}` : ' used'}
             </span>
+
             <button
               type="button"
               onClick={handleRefreshStorage}
               disabled={refreshingStorage}
               className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white border border-white/10 transition-colors cursor-pointer"
-              title="Refresh real phone storage count"
+              title="Re-scan actual phone storage usage"
             >
-              <RefreshCw className={`w-3.5 h-3.5 ${refreshingStorage ? 'animate-spin text-red-400' : ''}`} />
+              <RefreshCw
+                className={`w-3.5 h-3.5 ${refreshingStorage ? 'animate-spin text-red-400' : ''}`}
+              />
             </button>
           </div>
         </div>
 
-        {/* Real Progress Bar */}
-        <div className="w-full h-2.5 bg-white/10 rounded-full overflow-hidden">
-          <div
-            className="h-full bg-gradient-to-r from-red-600 to-amber-500 rounded-full transition-all duration-500"
-            style={{ width: `${appUsageBytes > 0 ? Math.max(2, Math.min(100, percentUsed)) : 0}%` }}
-          />
-        </div>
-
-        {/* Real Storage Breakdown Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
-          <div className="px-3 py-2 rounded-xl bg-black/35 border border-white/5 flex items-center justify-between">
-            <span className="text-[11px] text-gray-400">Offline Videos Saved</span>
-            <span className="text-xs font-bold font-mono text-white">
-              {formatBytes(moviesBytes)} ({verifiedOfflineDownloads.length})
-            </span>
+        {/* Multi-segment Storage Bar (Downloaded Movies vs App Web Storage vs Free Phone Space) */}
+        <div className="space-y-1.5">
+          <div className="w-full h-3 bg-white/10 rounded-full overflow-hidden flex">
+            {moviesBytes > 0 && (
+              <div
+                className="h-full bg-[#E50914] transition-all duration-500"
+                style={{ width: `${Math.max(2, moviesQuotaPercent)}%` }}
+                title={`Downloaded Movies: ${formatBytes(moviesBytes)}`}
+              />
+            )}
+            {otherAppBytes > 0 && (
+              <div
+                className="h-full bg-amber-500/80 transition-all duration-500"
+                style={{ width: `${Math.max(1, otherQuotaPercent)}%` }}
+                title={`App Cache & Web Storage: ${formatBytes(otherAppBytes)}`}
+              />
+            )}
           </div>
 
-          <div className="px-3 py-2 rounded-xl bg-black/35 border border-white/5 flex items-center justify-between">
-            <span className="text-[11px] text-gray-400">Free Phone Space</span>
-            <span className="text-xs font-bold font-mono text-emerald-400">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-gray-400">
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="inline-flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-[#E50914]" />
+                Movies ({formatBytes(moviesBytes)})
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-amber-500" />
+                Web &amp; App Data ({formatBytes(Math.max(webAndCacheBytes, otherAppBytes))})
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-white/20" />
+                Free ({deviceQuotaBytes > 0 ? formatBytes(availableBytes) : '—'})
+              </span>
+            </div>
+            {deviceStorage?.measuredAt && (
+              <span className="text-[10px] text-gray-500 font-mono">
+                Measured {new Date(deviceStorage.measuredAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* 4-Metric Real Storage Breakdown Grid */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
+          <div className="px-3 py-2.5 rounded-xl bg-black/35 border border-white/5 space-y-0.5">
+            <p className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold">
+              Downloaded Movies
+            </p>
+            <p className="text-sm font-bold font-mono text-white">
+              {formatBytes(moviesBytes)}
+            </p>
+            <p className="text-[10px] text-gray-500">
+              {verifiedOfflineDownloads.length}{' '}
+              {verifiedOfflineDownloads.length === 1 ? 'file' : 'files'} on phone
+            </p>
+          </div>
+
+          <div className="px-3 py-2.5 rounded-xl bg-black/35 border border-white/5 space-y-0.5">
+            <p className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold">
+              Free Phone Space
+            </p>
+            <p className="text-sm font-bold font-mono text-emerald-400">
               {deviceQuotaBytes > 0 ? formatBytes(availableBytes) : 'Measuring...'}
-            </span>
+            </p>
+            <p className="text-[10px] text-gray-500">
+              {deviceQuotaBytes > 0 ? `of ${formatBytes(deviceQuotaBytes)} quota` : 'Web Storage API'}
+            </p>
           </div>
 
-          <div className="px-3 py-2 rounded-xl bg-black/35 border border-white/5 flex items-center justify-between">
-            <span className="text-[11px] text-gray-400">Phone Quota Used</span>
-            <span className="text-xs font-bold font-mono text-amber-400">
-              {deviceQuotaBytes > 0 ? `${percentUsed.toFixed(2)}%` : '0%'}
-            </span>
+          <div className="px-3 py-2.5 rounded-xl bg-black/35 border border-white/5 space-y-0.5">
+            <p className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold">
+              Web Storage Data
+            </p>
+            <p className="text-sm font-bold font-mono text-amber-400">
+              {formatBytes(Math.max(webAndCacheBytes, otherAppBytes))}
+            </p>
+            <p className="text-[10px] text-gray-500">
+              Cache &amp; local metadata
+            </p>
+          </div>
+
+          <div className="px-3 py-2.5 rounded-xl bg-black/35 border border-white/5 space-y-0.5">
+            <p className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold">
+              Phone Quota Used
+            </p>
+            <p className="text-sm font-bold font-mono text-white">
+              {deviceQuotaBytes > 0 ? `${percentUsed.toFixed(2)}%` : '0.00%'}
+            </p>
+            <p className="text-[10px] text-gray-500">
+              {deviceStorage?.estimateSupported ? 'Live StorageManager' : 'Direct file count'}
+            </p>
           </div>
         </div>
+
+        {/* Linked Phone Folder Summary (File System Access API showDirectoryPicker) */}
+        {linkedFolder && (
+          <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5 rounded-xl bg-emerald-950/25 border border-emerald-500/25 text-xs">
+            <div className="flex items-center gap-2 min-w-0">
+              <FolderOpen className="w-4 h-4 text-emerald-400 shrink-0" />
+              <div className="min-w-0">
+                <p className="text-white font-semibold truncate">
+                  Linked Folder: <span className="text-emerald-300 font-mono">{linkedFolder.folderName}</span>
+                </p>
+                <p className="text-[11px] text-gray-400">
+                  {linkedFolder.videoFilesCount} video{linkedFolder.videoFilesCount === 1 ? '' : 's'} ({formatBytes(linkedFolder.videoBytes)}) · {linkedFolder.totalFilesCount} total files ({formatBytes(linkedFolder.totalBytes)})
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={handleUnlinkFolder}
+              className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white cursor-pointer"
+              title="Unlink folder"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
+        {/* Per-Movie Actual Storage Footprint Breakdown */}
+        {verifiedOfflineDownloads.length > 0 && moviesBytes > 0 && (
+          <div className="pt-2 border-t border-white/5 space-y-2">
+            <p className="text-[11px] font-bold uppercase tracking-wider text-gray-400">
+              Storage Breakdown by Movie
+            </p>
+            <div className="space-y-1.5">
+              {verifiedOfflineDownloads.map((item) => {
+                const itemBytes = item.fileSizeBytes || Math.round((item.fileSizeMb || 0) * 1024 * 1024);
+                const sharePct = moviesBytes > 0 ? Math.min(100, Math.round((itemBytes / moviesBytes) * 100)) : 0;
+                return (
+                  <div key={`usage_${item.movieId}`} className="space-y-1">
+                    <div className="flex items-center justify-between text-[11px] gap-2">
+                      <span className="text-gray-200 font-medium truncate">{item.movieTitle}</span>
+                      <span className="text-gray-300 font-mono shrink-0">
+                        {formatBytes(itemBytes)} ({sharePct}%)
+                      </span>
+                    </div>
+                    <div className="w-full h-1.5 bg-white/5 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-gradient-to-r from-[#E50914] to-amber-500 rounded-full"
+                        style={{ width: `${Math.max(2, sharePct)}%` }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         <p className="text-[11px] text-gray-400 flex items-center gap-1.5">
           <Smartphone className="w-3.5 h-3.5 text-red-400 shrink-0" />

@@ -1,14 +1,70 @@
 /**
- * Real Offline Download Engine, Phone Gallery Exporter, and Real Device Storage Reader.
- * - Stores real video Blob binaries in IndexedDB for genuine offline playback (even in Airplane Mode).
- * - Saves real .mp4 video files into phone storage / Gallery (Android MediaStore Downloads & iOS Photos Share Sheet).
- * - Reads real phone storage quota and usage via navigator.storage.estimate() + exact IndexedDB byte totals.
+ * Real Offline Download Engine, File System Access API (OPFS + Device Folder Picker),
+ * Phone Gallery Exporter, and Web Storage API Device Storage Inspector.
+ *
+ * Storage layers:
+ * 1. Origin Private File System (OPFS via navigator.storage.getDirectory) when writable file handles
+ *    are supported — stores real native-backed video files and reads exact File.size directly from disk.
+ * 2. IndexedDB fallback (moviekart_offline_media_v1) for browsers without OPFS createWritable() (e.g. older iOS).
+ * 3. Optional User Device Folder via File System Access API (window.showDirectoryPicker) to scan & save
+ *    downloaded movies directly into a chosen phone/device folder and count actual folder usage.
+ * 4. Web Storage API (navigator.storage.estimate + usageDetails + localStorage byte measurement)
+ *    to report real phone storage quota, free space, app usage, and persistent storage protection.
  */
 
 const DB_NAME = 'moviekart_offline_media_v1';
 const DB_VERSION = 1;
 const BLOBS_STORE = 'video_blobs';
 const META_STORE = 'video_meta';
+const OPFS_DIR_NAME = 'moviekart_offline_videos';
+
+interface ExtendedStorageEstimate extends StorageEstimate {
+  usageDetails?: {
+    indexedDB?: number;
+    caches?: number;
+    fileSystem?: number;
+    serviceWorkerRegistrations?: number;
+  };
+}
+
+interface FSFileHandleLike {
+  kind: 'file';
+  name: string;
+  getFile: () => Promise<File>;
+  createWritable?: () => Promise<{
+    write: (data: Blob) => Promise<void>;
+    close: () => Promise<void>;
+  }>;
+}
+
+interface FSDirectoryHandleLike {
+  kind: 'directory';
+  name: string;
+  getDirectoryHandle: (name: string, options?: { create?: boolean }) => Promise<FSDirectoryHandleLike>;
+  getFileHandle: (name: string, options?: { create?: boolean }) => Promise<FSFileHandleLike>;
+  removeEntry: (name: string) => Promise<void>;
+  entries?: () => AsyncIterableIterator<[string, FSFileHandleLike | FSDirectoryHandleLike]>;
+  values?: () => AsyncIterableIterator<FSFileHandleLike | FSDirectoryHandleLike>;
+  queryPermission?: (desc?: { mode?: 'read' | 'readwrite' }) => Promise<'granted' | 'denied' | 'prompt'>;
+  requestPermission?: (desc?: { mode?: 'read' | 'readwrite' }) => Promise<'granted' | 'denied' | 'prompt'>;
+}
+
+interface FileSystemWindow extends Window {
+  showDirectoryPicker?: (options?: {
+    id?: string;
+    mode?: 'read' | 'readwrite';
+    startIn?: 'downloads' | 'videos' | 'documents';
+  }) => Promise<FSDirectoryHandleLike>;
+  showSaveFilePicker?: (options?: {
+    suggestedName?: string;
+    types?: Array<{
+      description?: string;
+      accept: Record<string, string[]>;
+    }>;
+  }) => Promise<FSFileHandleLike>;
+}
+
+export type OfflineStorageBackend = 'opfs' | 'indexeddb';
 
 export interface OfflineVideoMeta {
   id: string;
@@ -16,17 +72,36 @@ export interface OfflineVideoMeta {
   mimeType: string;
   fileName: string;
   savedAt: number;
+  storageBackend?: OfflineStorageBackend;
+  opfsKey?: string;
 }
 
 export interface OfflineVideoRecord extends OfflineVideoMeta {
   blob: Blob;
 }
 
+export interface LinkedDeviceFolderInfo {
+  folderName: string;
+  videoFilesCount: number;
+  videoBytes: number;
+  totalFilesCount: number;
+  totalBytes: number;
+  scannedAt: number;
+}
+
 export interface RealDeviceStorageInfo {
-  /** Exact bytes used by MovieKart offline videos stored in IndexedDB */
+  /** Exact bytes used by MovieKart offline videos (OPFS files + IndexedDB blobs) */
   moviesBytes: number;
   /** Number of real offline video files currently stored on this device */
   moviesCount: number;
+  /** Exact bytes stored in OPFS (Origin Private File System) */
+  opfsBytes: number;
+  /** Exact bytes stored in IndexedDB video store (non-OPFS fallback) */
+  indexedDbMoviesBytes: number;
+  /** Exact bytes used by Web Storage API (localStorage) */
+  webStorageBytes: number;
+  /** Cache Storage bytes reported by StorageManager usageDetails (if exposed) */
+  cacheStorageBytes: number;
   /** Total bytes reported by navigator.storage.estimate().usage */
   appUsageBytes: number;
   /** Real storage quota reported by the phone's browser/OS in bytes */
@@ -35,10 +110,18 @@ export interface RealDeviceStorageInfo {
   availableBytes: number;
   /** Percentage of phone quota currently used (0-100) */
   percentUsed: number;
+  /** Active primary storage engine */
+  activeEngine: 'File System API (OPFS)' | 'Web Storage (IndexedDB)';
+  /** Whether Origin Private File System (OPFS) is supported */
+  opfsSupported: boolean;
+  /** Whether interactive Device Folder Picker (showDirectoryPicker) is supported */
+  directoryPickerSupported: boolean;
   /** Whether the browser granted persistent storage protection */
   isPersisted: boolean;
   /** Whether navigator.storage.estimate() is supported on this device */
   estimateSupported: boolean;
+  /** Optional user-linked phone/device folder stats via File System Access API */
+  linkedFolder: LinkedDeviceFolderInfo | null;
   /** Timestamp of the last real storage measurement */
   measuredAt: number;
 }
@@ -56,6 +139,9 @@ export interface RealDownloadResult {
   mimeType: string;
   fileName: string;
 }
+
+// Holds an optional user-selected device folder handle (via File System Access API) for the current session
+let linkedDirectoryHandle: FSDirectoryHandleLike | null = null;
 
 export function formatBytes(bytes?: number | null): string {
   if (!bytes || !Number.isFinite(bytes) || bytes <= 0) return '0 B';
@@ -87,6 +173,248 @@ export function buildSafeVideoFileName(title: string, mimeType = 'video/mp4'): s
   return `MovieKart_${cleanBase}.${ext}`;
 }
 
+function buildOpfsKey(id: string): string {
+  const safeId = (id || 'video').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80);
+  return `${safeId}.bin`;
+}
+
+export function isDirectoryPickerSupported(): boolean {
+  if (typeof window === 'undefined') return false;
+  return typeof (window as FileSystemWindow).showDirectoryPicker === 'function';
+}
+
+export function isOpfsSupported(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  return typeof navigator.storage?.getDirectory === 'function';
+}
+
+async function getOpfsOfflineDir(create = false): Promise<FSDirectoryHandleLike | null> {
+  if (!isOpfsSupported()) return null;
+  try {
+    const root = (await navigator.storage.getDirectory()) as unknown as FSDirectoryHandleLike;
+    return await root.getDirectoryHandle(OPFS_DIR_NAME, { create });
+  } catch {
+    return null;
+  }
+}
+
+async function writeBlobToOpfs(id: string, blob: Blob): Promise<string | null> {
+  const dir = await getOpfsOfflineDir(true);
+  if (!dir) return null;
+  const key = buildOpfsKey(id);
+  try {
+    const fileHandle = await dir.getFileHandle(key, { create: true });
+    if (typeof fileHandle.createWritable !== 'function') {
+      return null;
+    }
+    const writable = await fileHandle.createWritable();
+    await writable.write(blob);
+    await writable.close();
+    return key;
+  } catch {
+    return null;
+  }
+}
+
+async function readBlobFromOpfs(opfsKey: string, mimeType: string): Promise<Blob | null> {
+  const dir = await getOpfsOfflineDir(false);
+  if (!dir) return null;
+  try {
+    const fileHandle = await dir.getFileHandle(opfsKey);
+    const file = await fileHandle.getFile();
+    if (!file || file.size === 0) return null;
+    if (file.type && file.type.startsWith('video/')) return file;
+    return new Blob([file], { type: mimeType || 'video/mp4' });
+  } catch {
+    return null;
+  }
+}
+
+async function deleteFromOpfs(opfsKey: string): Promise<void> {
+  const dir = await getOpfsOfflineDir(false);
+  if (!dir) return;
+  try {
+    await dir.removeEntry(opfsKey);
+  } catch {
+    // ignore if missing
+  }
+}
+
+async function clearOpfsDir(): Promise<void> {
+  const dir = await getOpfsOfflineDir(false);
+  if (!dir) return;
+  try {
+    if (typeof dir.entries === 'function') {
+      for await (const [name] of dir.entries()) {
+        try {
+          await dir.removeEntry(name);
+        } catch {
+          // ignore
+        }
+      }
+    }
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * Inspects actual on-disk file sizes inside the Origin Private File System directory.
+ */
+async function measureOpfsDirectory(): Promise<{ totalBytes: number; fileSizesByKey: Record<string, number> }> {
+  const fileSizesByKey: Record<string, number> = {};
+  let totalBytes = 0;
+
+  const dir = await getOpfsOfflineDir(false);
+  if (!dir) return { totalBytes: 0, fileSizesByKey };
+
+  try {
+    if (typeof dir.entries === 'function') {
+      for await (const [name, handle] of dir.entries()) {
+        if (handle.kind === 'file') {
+          try {
+            const file = await handle.getFile();
+            fileSizesByKey[name] = file.size;
+            totalBytes += file.size;
+          } catch {
+            // ignore unreadable handle
+          }
+        }
+      }
+    } else if (typeof dir.values === 'function') {
+      for await (const handle of dir.values()) {
+        if (handle.kind === 'file') {
+          try {
+            const file = await handle.getFile();
+            fileSizesByKey[handle.name] = file.size;
+            totalBytes += file.size;
+          } catch {
+            // ignore
+          }
+        }
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  return { totalBytes, fileSizesByKey };
+}
+
+/**
+ * Measures real byte usage of Web Storage API (localStorage) on this device.
+ */
+export function measureWebLocalStorageBytes(): number {
+  if (typeof window === 'undefined' || !window.localStorage) return 0;
+  try {
+    let totalBytes = 0;
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const key = window.localStorage.key(i);
+      if (!key) continue;
+      const val = window.localStorage.getItem(key) || '';
+      // UTF-16 strings take 2 bytes per code unit in browser localStorage
+      totalBytes += (key.length + val.length) * 2;
+    }
+    return totalBytes;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Scans a user-linked File System Access API folder on the phone/device and counts real video bytes.
+ */
+async function scanDirectoryHandle(handle: FSDirectoryHandleLike): Promise<LinkedDeviceFolderInfo> {
+  const VIDEO_EXT_RE = /\.(mp4|m4v|mov|webm|mkv|avi|3gp)$/i;
+  let videoFilesCount = 0;
+  let videoBytes = 0;
+  let totalFilesCount = 0;
+  let totalBytes = 0;
+
+  const iterator =
+    typeof handle.values === 'function'
+      ? handle.values()
+      : null;
+
+  if (iterator) {
+    for await (const entry of iterator) {
+      if (entry.kind === 'file') {
+        try {
+          const file = await entry.getFile();
+          totalFilesCount++;
+          totalBytes += file.size;
+          if (VIDEO_EXT_RE.test(entry.name) || file.type.startsWith('video/')) {
+            videoFilesCount++;
+            videoBytes += file.size;
+          }
+        } catch {
+          // skip unreadable file
+        }
+      }
+    }
+  }
+
+  return {
+    folderName: handle.name || 'Phone Folder',
+    videoFilesCount,
+    videoBytes,
+    totalFilesCount,
+    totalBytes,
+    scannedAt: Date.now()
+  };
+}
+
+/**
+ * Opens the native File System Access API folder picker so the user can link a real device folder
+ * (e.g., Downloads or Movies) for accurate folder storage tracking and direct MP4 saving.
+ */
+export async function pickAndLinkDeviceFolder(): Promise<LinkedDeviceFolderInfo | null> {
+  const fsWin = typeof window !== 'undefined' ? (window as FileSystemWindow) : null;
+  if (!fsWin || typeof fsWin.showDirectoryPicker !== 'function') {
+    throw new Error('Device folder picker is not supported in this browser.');
+  }
+
+  try {
+    const dirHandle = await fsWin.showDirectoryPicker({
+      id: 'moviekart-offline-folder',
+      mode: 'readwrite',
+      startIn: 'downloads'
+    });
+    linkedDirectoryHandle = dirHandle;
+    return await scanDirectoryHandle(dirHandle);
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      return null;
+    }
+    throw err;
+  }
+}
+
+export function unlinkDeviceFolder(): void {
+  linkedDirectoryHandle = null;
+}
+
+export async function writeBlobToLinkedDeviceFolder(blob: Blob, fileName: string): Promise<boolean> {
+  if (!linkedDirectoryHandle) return false;
+  try {
+    if (typeof linkedDirectoryHandle.queryPermission === 'function') {
+      const perm = await linkedDirectoryHandle.queryPermission({ mode: 'readwrite' });
+      if (perm !== 'granted' && typeof linkedDirectoryHandle.requestPermission === 'function') {
+        const requested = await linkedDirectoryHandle.requestPermission({ mode: 'readwrite' });
+        if (requested !== 'granted') return false;
+      }
+    }
+    const fileHandle = await linkedDirectoryHandle.getFileHandle(fileName, { create: true });
+    if (typeof fileHandle.createWritable !== 'function') return false;
+    const writable = await fileHandle.createWritable();
+    await writable.write(blob);
+    await writable.close();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function openOfflineDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     if (typeof window === 'undefined' || !('indexedDB' in window)) {
@@ -111,17 +439,28 @@ function openOfflineDb(): Promise<IDBDatabase> {
   });
 }
 
-export async function saveOfflineVideoBlob(record: OfflineVideoRecord): Promise<void> {
+export async function saveOfflineVideoBlob(record: OfflineVideoRecord): Promise<OfflineStorageBackend> {
+  // 1. Prefer File System Access API (OPFS) so the movie is written as a real file on the device filesystem
+  const opfsKey = await writeBlobToOpfs(record.id, record.blob);
+  const backend: OfflineStorageBackend = opfsKey ? 'opfs' : 'indexeddb';
+
   const db = await openOfflineDb();
-  return new Promise((resolve, reject) => {
+  await new Promise<void>((resolve, reject) => {
     const tx = db.transaction([BLOBS_STORE, META_STORE], 'readwrite');
-    tx.objectStore(BLOBS_STORE).put({ id: record.id, blob: record.blob });
+    if (backend === 'indexeddb') {
+      tx.objectStore(BLOBS_STORE).put({ id: record.id, blob: record.blob });
+    } else {
+      // Avoid duplicating large video bytes in both OPFS and IndexedDB
+      tx.objectStore(BLOBS_STORE).delete(record.id);
+    }
     const meta: OfflineVideoMeta = {
       id: record.id,
       sizeBytes: record.sizeBytes,
       mimeType: record.mimeType,
       fileName: record.fileName,
-      savedAt: record.savedAt
+      savedAt: record.savedAt,
+      storageBackend: backend,
+      opfsKey: opfsKey || undefined
     };
     tx.objectStore(META_STORE).put(meta);
     tx.oncomplete = () => {
@@ -137,40 +476,39 @@ export async function saveOfflineVideoBlob(record: OfflineVideoRecord): Promise<
       reject(tx.error || new Error('Storage write aborted (device storage may be full).'));
     };
   });
+
+  // Also mirror into user-linked device folder if they connected one via File System Access API
+  if (linkedDirectoryHandle) {
+    await writeBlobToLinkedDeviceFolder(record.blob, record.fileName);
+  }
+
+  return backend;
 }
 
 export async function getOfflineVideoRecord(id: string): Promise<OfflineVideoRecord | null> {
   try {
     const db = await openOfflineDb();
-    return await new Promise((resolve, reject) => {
+    const { blobResult, metaResult } = await new Promise<{
+      blobResult?: { id: string; blob: Blob };
+      metaResult?: OfflineVideoMeta;
+    }>((resolve, reject) => {
       const tx = db.transaction([BLOBS_STORE, META_STORE], 'readonly');
       const blobReq = tx.objectStore(BLOBS_STORE).get(id);
       const metaReq = tx.objectStore(META_STORE).get(id);
 
-      let blobResult: { id: string; blob: Blob } | undefined;
-      let metaResult: OfflineVideoMeta | undefined;
+      let bRes: { id: string; blob: Blob } | undefined;
+      let mRes: OfflineVideoMeta | undefined;
 
       blobReq.onsuccess = () => {
-        blobResult = blobReq.result;
+        bRes = blobReq.result;
       };
       metaReq.onsuccess = () => {
-        metaResult = metaReq.result;
+        mRes = metaReq.result;
       };
 
       tx.oncomplete = () => {
         db.close();
-        if (!blobResult?.blob) {
-          resolve(null);
-          return;
-        }
-        resolve({
-          id,
-          blob: blobResult.blob,
-          sizeBytes: metaResult?.sizeBytes || blobResult.blob.size,
-          mimeType: metaResult?.mimeType || blobResult.blob.type || 'video/mp4',
-          fileName: metaResult?.fileName || buildSafeVideoFileName(id, blobResult.blob.type),
-          savedAt: metaResult?.savedAt || Date.now()
-        });
+        resolve({ blobResult: bRes, metaResult: mRes });
       };
 
       tx.onerror = () => {
@@ -178,6 +516,36 @@ export async function getOfflineVideoRecord(id: string): Promise<OfflineVideoRec
         reject(tx.error);
       };
     });
+
+    // Try OPFS file handle first if stored via File System Access API
+    const opfsKey = metaResult?.opfsKey || buildOpfsKey(id);
+    if (metaResult?.storageBackend === 'opfs' || !blobResult?.blob) {
+      const opfsBlob = await readBlobFromOpfs(opfsKey, metaResult?.mimeType || 'video/mp4');
+      if (opfsBlob) {
+        return {
+          id,
+          blob: opfsBlob,
+          sizeBytes: opfsBlob.size,
+          mimeType: metaResult?.mimeType || opfsBlob.type || 'video/mp4',
+          fileName: metaResult?.fileName || buildSafeVideoFileName(id, opfsBlob.type),
+          savedAt: metaResult?.savedAt || Date.now(),
+          storageBackend: 'opfs',
+          opfsKey
+        };
+      }
+    }
+
+    if (!blobResult?.blob) return null;
+
+    return {
+      id,
+      blob: blobResult.blob,
+      sizeBytes: metaResult?.sizeBytes || blobResult.blob.size,
+      mimeType: metaResult?.mimeType || blobResult.blob.type || 'video/mp4',
+      fileName: metaResult?.fileName || buildSafeVideoFileName(id, blobResult.blob.type),
+      savedAt: metaResult?.savedAt || Date.now(),
+      storageBackend: 'indexeddb'
+    };
   } catch {
     return null;
   }
@@ -186,33 +554,53 @@ export async function getOfflineVideoRecord(id: string): Promise<OfflineVideoRec
 export async function getAllOfflineVideoMeta(): Promise<Record<string, OfflineVideoMeta>> {
   try {
     const db = await openOfflineDb();
-    return await new Promise((resolve, reject) => {
+    const metaList = await new Promise<OfflineVideoMeta[]>((resolve, reject) => {
       const tx = db.transaction([META_STORE], 'readonly');
       const req = tx.objectStore(META_STORE).getAll();
       req.onsuccess = () => {
-        const list = (req.result || []) as OfflineVideoMeta[];
-        const map: Record<string, OfflineVideoMeta> = {};
-        for (const item of list) {
-          if (item?.id) map[item.id] = item;
-        }
         db.close();
-        resolve(map);
+        resolve((req.result || []) as OfflineVideoMeta[]);
       };
       req.onerror = () => {
         db.close();
         reject(req.error);
       };
     });
+
+    const opfsScan = await measureOpfsDirectory();
+    const map: Record<string, OfflineVideoMeta> = {};
+
+    for (const item of metaList) {
+      if (!item?.id) continue;
+      if (item.storageBackend === 'opfs') {
+        const key = item.opfsKey || buildOpfsKey(item.id);
+        const actualDiskSize = opfsScan.fileSizesByKey[key];
+        if (typeof actualDiskSize === 'number' && actualDiskSize > 0) {
+          map[item.id] = { ...item, sizeBytes: actualDiskSize };
+        }
+      } else {
+        map[item.id] = item;
+      }
+    }
+    return map;
   } catch {
     return {};
   }
 }
 
 export async function deleteOfflineVideoBlob(id: string): Promise<void> {
+  await deleteFromOpfs(buildOpfsKey(id));
   try {
     const db = await openOfflineDb();
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction([BLOBS_STORE, META_STORE], 'readwrite');
+      const metaReq = tx.objectStore(META_STORE).get(id);
+      metaReq.onsuccess = () => {
+        const meta = metaReq.result as OfflineVideoMeta | undefined;
+        if (meta?.opfsKey && meta.opfsKey !== buildOpfsKey(id)) {
+          void deleteFromOpfs(meta.opfsKey);
+        }
+      };
       tx.objectStore(BLOBS_STORE).delete(id);
       tx.objectStore(META_STORE).delete(id);
       tx.oncomplete = () => {
@@ -230,6 +618,7 @@ export async function deleteOfflineVideoBlob(id: string): Promise<void> {
 }
 
 export async function clearAllOfflineVideoBlobs(): Promise<void> {
+  await clearOpfsDir();
   try {
     const db = await openOfflineDb();
     await new Promise<void>((resolve, reject) => {
@@ -261,13 +650,29 @@ export async function requestPersistentStorage(): Promise<boolean> {
   return false;
 }
 
+/**
+ * Combines File System Access API (OPFS file size scan + optional linked folder scan)
+ * with Web Storage API (navigator.storage.estimate + usageDetails + localStorage bytes)
+ * to report actual phone storage usage and free space.
+ */
 export async function getRealDeviceStorageInfo(): Promise<RealDeviceStorageInfo> {
-  const metaMap = await getAllOfflineVideoMeta();
-  const entries = Object.values(metaMap);
-  const moviesBytes = entries.reduce((sum, item) => sum + Math.max(0, item.sizeBytes || 0), 0);
-  const moviesCount = entries.length;
+  const [metaMap, opfsScan] = await Promise.all([
+    getAllOfflineVideoMeta(),
+    measureOpfsDirectory()
+  ]);
 
-  let appUsageBytes = moviesBytes;
+  const entries = Object.values(metaMap);
+  const indexedDbMoviesBytes = entries
+    .filter((item) => item.storageBackend !== 'opfs')
+    .reduce((sum, item) => sum + Math.max(0, item.sizeBytes || 0), 0);
+
+  const opfsBytes = opfsScan.totalBytes;
+  const moviesBytes = opfsBytes + indexedDbMoviesBytes;
+  const moviesCount = entries.length;
+  const webStorageBytes = measureWebLocalStorageBytes();
+
+  let appUsageBytes = moviesBytes + webStorageBytes;
+  let cacheStorageBytes = 0;
   let deviceQuotaBytes = 0;
   let estimateSupported = false;
   let isPersisted = false;
@@ -283,17 +688,29 @@ export async function getRealDeviceStorageInfo(): Promise<RealDeviceStorageInfo>
 
     try {
       if (typeof navigator.storage.estimate === 'function') {
-        const estimate = await navigator.storage.estimate();
+        const estimate = (await navigator.storage.estimate()) as ExtendedStorageEstimate;
         estimateSupported = true;
         if (typeof estimate.usage === 'number' && Number.isFinite(estimate.usage)) {
-          appUsageBytes = Math.max(estimate.usage, moviesBytes);
+          appUsageBytes = Math.max(estimate.usage, moviesBytes + webStorageBytes);
         }
         if (typeof estimate.quota === 'number' && Number.isFinite(estimate.quota) && estimate.quota > 0) {
           deviceQuotaBytes = estimate.quota;
         }
+        if (estimate.usageDetails) {
+          cacheStorageBytes = Math.max(0, estimate.usageDetails.caches || 0);
+        }
       }
     } catch {
       // ignore
+    }
+  }
+
+  let linkedFolder: LinkedDeviceFolderInfo | null = null;
+  if (linkedDirectoryHandle) {
+    try {
+      linkedFolder = await scanDirectoryHandle(linkedDirectoryHandle);
+    } catch {
+      linkedFolder = null;
     }
   }
 
@@ -303,15 +720,25 @@ export async function getRealDeviceStorageInfo(): Promise<RealDeviceStorageInfo>
       ? Math.min(100, Number(((appUsageBytes / deviceQuotaBytes) * 100).toFixed(2)))
       : 0;
 
+  const opfsCapable = isOpfsSupported();
+
   return {
     moviesBytes,
     moviesCount,
+    opfsBytes,
+    indexedDbMoviesBytes,
+    webStorageBytes,
+    cacheStorageBytes,
     appUsageBytes,
     deviceQuotaBytes,
     availableBytes,
     percentUsed,
+    activeEngine: opfsCapable ? 'File System API (OPFS)' : 'Web Storage (IndexedDB)',
+    opfsSupported: opfsCapable,
+    directoryPickerSupported: isDirectoryPickerSupported(),
     isPersisted,
     estimateSupported,
+    linkedFolder,
     measuredAt: Date.now()
   };
 }
@@ -395,7 +822,6 @@ async function fetchVideoStream(
       return await tryFetch(proxyUrl);
     } catch (proxyErr) {
       if (signal.aborted) throw proxyErr;
-      // Fallback to direct fetch if backend proxy isn't deployed (e.g. static hosting)
       return await tryFetch(targetUrl);
     }
   }
@@ -404,7 +830,6 @@ async function fetchVideoStream(
     return await tryFetch(targetUrl);
   } catch (directErr) {
     if (signal.aborted) throw directErr;
-    // Fallback to backend streaming proxy if direct fetch fails (e.g. CORS on storage bucket)
     return await tryFetch(proxyUrl);
   }
 }
@@ -529,13 +954,12 @@ export function triggerBrowserFileDownload(blob: Blob, fileName: string): void {
   document.body.appendChild(anchor);
   anchor.click();
   document.body.removeChild(anchor);
-  // Keep URL alive long enough for mobile browsers to finish copying the stream
   setTimeout(() => {
     URL.revokeObjectURL(objectUrl);
   }, 60_000);
 }
 
-export type GallerySaveOutcome = 'shared_to_gallery' | 'saved_to_downloads' | 'cancelled';
+export type GallerySaveOutcome = 'shared_to_gallery' | 'saved_to_folder' | 'saved_to_downloads' | 'cancelled';
 
 function isMobileBrowser(): boolean {
   if (typeof navigator === 'undefined') return false;
@@ -543,12 +967,11 @@ function isMobileBrowser(): boolean {
 }
 
 /**
- * Saves a real downloaded video Blob to the phone's Gallery / Photos / Downloads.
- * - On mobile when triggered by user tap (preferNativeShare: true): uses native Web Share API
- *   with File payload so iOS shows "Save Video" directly to Photos/Gallery and Android lets users
- *   save straight to Gallery/Photos. Falls back to direct .mp4 file download if unsupported.
- * - When triggered automatically on download completion (preferNativeShare: false): triggers direct
- *   .mp4 file download so Android MediaStore automatically adds it to Phone Gallery / Downloads.
+ * Saves a real downloaded video Blob to the phone's Gallery / Photos / Device Folder.
+ * 1. If a File System Access API folder is linked, writes directly into that folder.
+ * 2. On mobile tap (preferNativeShare: true), opens native Share Sheet so iOS shows "Save Video" to Photos.
+ * 3. On desktop/supported Chrome tap (preferNativeShare: true), offers showSaveFilePicker when available.
+ * 4. Always falls back cleanly to standard MP4 download (which Android Gallery auto-indexes).
  */
 export async function saveVideoToPhoneGallery(
   blob: Blob,
@@ -586,7 +1009,32 @@ export async function saveVideoToPhoneGallery(
       if (err instanceof DOMException && err.name === 'AbortError') {
         return 'cancelled';
       }
-      // Fall through to direct MP4 file download on error
+    }
+  }
+
+  // If user tapped Save on a browser with File System Access API showSaveFilePicker
+  const fsWin = typeof window !== 'undefined' ? (window as FileSystemWindow) : null;
+  if (preferNativeShare && !isMobileBrowser() && fsWin && typeof fsWin.showSaveFilePicker === 'function') {
+    try {
+      const handle = await fsWin.showSaveFilePicker({
+        suggestedName: fileName,
+        types: [
+          {
+            description: 'MP4 Video File',
+            accept: { [videoMime]: ['.mp4', '.webm', '.mov'] }
+          }
+        ]
+      });
+      if (typeof handle.createWritable === 'function') {
+        const writable = await handle.createWritable();
+        await writable.write(blob);
+        await writable.close();
+        return 'saved_to_folder';
+      }
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        return 'cancelled';
+      }
     }
   }
 
