@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { VJTrack } from '../types';
 import { isYouTubeUrl, toYouTubeEmbedUrl, resolveYouTubeStream } from '../lib/liveChannels';
+import { getOfflineVideoRecord } from '../lib/offlineDownloads';
 
 function toDriveEmbedUrl(rawUrl: string): string {
   let trimmed = (rawUrl || '').trim();
@@ -73,8 +74,43 @@ export const VideoPlayerModal: React.FC = () => {
 
   const item = currentlyPlayingItem;
   const videoUrl = item?.videoUrl || '';
-  const isGoogleDrive = videoUrl.toLowerCase().includes('drive.google.com');
-  const isYouTube = !isGoogleDrive && isYouTubeUrl(videoUrl);
+  const [localOfflineUrl, setLocalOfflineUrl] = useState<string>('');
+
+  // Load real offline Blob from IndexedDB if this movie/episode has been downloaded to the phone
+  useEffect(() => {
+    if (!item || item.isTrailer) {
+      setLocalOfflineUrl('');
+      return;
+    }
+
+    let cancelled = false;
+    let createdObjectUrl = '';
+
+    getOfflineVideoRecord(item.id)
+      .then((record) => {
+        if (cancelled) return;
+        if (record?.blob) {
+          createdObjectUrl = URL.createObjectURL(record.blob);
+          setLocalOfflineUrl(createdObjectUrl);
+        } else {
+          setLocalOfflineUrl('');
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setLocalOfflineUrl('');
+      });
+
+    return () => {
+      cancelled = true;
+      if (createdObjectUrl) {
+        URL.revokeObjectURL(createdObjectUrl);
+      }
+    };
+  }, [item?.id, item?.isTrailer]);
+
+  const isPlayingLocalOffline = Boolean(localOfflineUrl);
+  const isGoogleDrive = !isPlayingLocalOffline && videoUrl.toLowerCase().includes('drive.google.com');
+  const isYouTube = !isPlayingLocalOffline && !isGoogleDrive && isYouTubeUrl(videoUrl);
   const isIframeEmbed = isGoogleDrive || isYouTube;
   const driveSrc = isGoogleDrive ? toDriveEmbedUrl(videoUrl) : '';
   const [resolvedYoutubeUrl, setResolvedYoutubeUrl] = useState<string>('');
@@ -99,6 +135,7 @@ export const VideoPlayerModal: React.FC = () => {
   }, [isYouTube, videoUrl]);
 
   const youtubeSrc = isYouTube ? resolvedYoutubeUrl || toYouTubeEmbedUrl(videoUrl) : '';
+  const effectiveVideoSrc = localOfflineUrl || videoUrl;
 
   const parentMovie = item
     ? item.movieId
@@ -202,7 +239,7 @@ export const VideoPlayerModal: React.FC = () => {
   if (!item) return null;
 
   const downloadInfo = getDownloadStatus(item.id);
-  const isDownloaded = downloadInfo?.status === 'completed';
+  const isDownloaded = Boolean(downloadInfo?.status === 'completed' && downloadInfo?.hasLocalBlob);
 
   const handleTimeUpdate = () => {
     if (videoRef.current) {
@@ -320,7 +357,7 @@ export const VideoPlayerModal: React.FC = () => {
             </button>
           )}
 
-          {!isDownloaded && !isIframeEmbed && (
+          {!isDownloaded && !isYouTube && !item.isTrailer && (
             <button
               onClick={() =>
                 startDownload({
@@ -372,7 +409,7 @@ export const VideoPlayerModal: React.FC = () => {
             controls
             autoPlay
             playsInline
-            src={videoUrl}
+            src={effectiveVideoSrc}
             poster={item.backdropUrl || item.posterUrl}
             onTimeUpdate={handleTimeUpdate}
             onLoadedMetadata={handleLoadedMetadata}
@@ -381,11 +418,11 @@ export const VideoPlayerModal: React.FC = () => {
           />
         )}
 
-        {/* Offline Badge Notification */}
-        {isDownloaded && !item.isTrailer && !isIframeEmbed && (
+        {/* Offline Badge Notification (only shown when genuinely playing from local phone storage) */}
+        {isPlayingLocalOffline && !item.isTrailer && (
           <div className="absolute top-4 left-4 z-20 bg-emerald-600/90 text-white text-xs font-bold px-3 py-1.5 rounded-lg flex items-center gap-2 shadow-lg backdrop-blur-sm pointer-events-none">
             <CheckCircle2 className="w-4 h-4 text-emerald-200" />
-            <span>Streaming from Offline Storage</span>
+            <span>Playing from Phone Offline Storage</span>
           </div>
         )}
 

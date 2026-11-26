@@ -21,7 +21,7 @@ export const MovieCard: React.FC<MovieCardProps> = ({ movie }) => {
   const [imgError, setImgError] = useState(false);
   const inWatchlist = isInWatchlist(movie.id);
   const downloadInfo = getDownloadStatus(movie.id);
-  const isDownloaded = downloadInfo?.status === 'completed';
+  const isDownloaded = Boolean(downloadInfo?.status === 'completed' && downloadInfo?.hasLocalBlob);
   const isDownloading = downloadInfo?.status === 'downloading';
   const defaultVJ = movie.vjTracks?.find((t) => t.isDefault) || movie.vjTracks?.[0];
 

@@ -1,6 +1,10 @@
+import dns from 'node:dns/promises';
 import fs from 'node:fs';
 import http from 'node:http';
+import net from 'node:net';
 import path from 'node:path';
+import { Readable } from 'node:stream';
+import type { ReadableStream as NodeWebReadableStream } from 'node:stream/web';
 import express from 'express';
 import type { Request, Response } from 'express';
 
@@ -372,6 +376,137 @@ async function resolveYouTubeUrl(rawInput: string): Promise<ResolvedYouTubeResul
   };
 }
 
+const MAX_PROXY_REDIRECTS = 5;
+
+function isPrivateOrReservedIpv4(ip: string): boolean {
+  const parts = ip.split('.').map(Number);
+  if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) {
+    return true;
+  }
+  const [a, b] = parts;
+  if (a === 0 || a === 10 || a === 127) return true; // 0.0.0.0/8, 10.0.0.0/8, 127.0.0.0/8
+  if (a === 169 && b === 254) return true; // link-local / cloud metadata 169.254.0.0/16
+  if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12
+  if (a === 192 && b === 168) return true; // 192.168.0.0/16
+  if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT 100.64.0.0/10
+  if (a >= 224) return true; // multicast & reserved
+  return false;
+}
+
+function isPrivateOrReservedIp(ip: string): boolean {
+  const ipVersion = net.isIP(ip);
+  if (ipVersion === 4) {
+    return isPrivateOrReservedIpv4(ip);
+  }
+  if (ipVersion === 6) {
+    const normalized = ip.toLowerCase();
+    if (normalized === '::' || normalized === '::1') return true;
+    if (normalized.startsWith('fc') || normalized.startsWith('fd')) return true; // ULA fc00::/7
+    if (/^fe[89ab]/.test(normalized)) return true; // link-local fe80::/10
+    if (normalized.startsWith('ff')) return true; // multicast
+    const v4MappedDotted = normalized.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+    if (v4MappedDotted?.[1]) {
+      return isPrivateOrReservedIpv4(v4MappedDotted[1]);
+    }
+    const v4MappedHex = normalized.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+    if (v4MappedHex?.[1] && v4MappedHex?.[2]) {
+      const hi = parseInt(v4MappedHex[1], 16);
+      const lo = parseInt(v4MappedHex[2], 16);
+      const dotted = `${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`;
+      return isPrivateOrReservedIpv4(dotted);
+    }
+    return false;
+  }
+  return true;
+}
+
+async function validatePublicVideoUrl(rawUrl: string): Promise<URL> {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl.trim());
+  } catch {
+    throw new Error('Invalid video URL');
+  }
+
+  if (parsed.protocol !== 'https:') {
+    throw new Error('Only HTTPS video URLs are supported for offline download');
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error('URLs containing embedded credentials are not allowed');
+  }
+
+  const hostname = parsed.hostname.toLowerCase().replace(/\.$/, '');
+  if (
+    !hostname ||
+    hostname === 'localhost' ||
+    hostname.endsWith('.localhost') ||
+    hostname.endsWith('.local') ||
+    hostname.endsWith('.internal')
+  ) {
+    throw new Error('Private or local hostnames are not permitted');
+  }
+
+  if (net.isIP(hostname)) {
+    if (isPrivateOrReservedIp(hostname)) {
+      throw new Error('Private or loopback IP addresses are not permitted');
+    }
+    return parsed;
+  }
+
+  const resolved = await dns.lookup(hostname, { all: true });
+  if (!resolved.length) {
+    throw new Error('Could not resolve video host');
+  }
+  for (const record of resolved) {
+    if (isPrivateOrReservedIp(record.address)) {
+      throw new Error('Video host resolved to a restricted network address');
+    }
+  }
+
+  return parsed;
+}
+
+function sanitizeDownloadFilename(rawName: string): string {
+  const cleaned = (rawName || 'MovieKart_Video.mp4')
+    .replace(/[\r\n"/\\<>:*?|]/g, '_')
+    .trim()
+    .slice(0, 100);
+  return cleaned || 'MovieKart_Video.mp4';
+}
+
+async function fetchPublicVideoWithSafeRedirects(
+  initialUrl: string,
+  signal: AbortSignal
+): Promise<globalThis.Response> {
+  let currentUrl = initialUrl;
+
+  for (let hop = 0; hop <= MAX_PROXY_REDIRECTS; hop++) {
+    const validated = await validatePublicVideoUrl(currentUrl);
+    const upstream = await fetch(validated.toString(), {
+      method: 'GET',
+      redirect: 'manual',
+      signal,
+      headers: {
+        'User-Agent': DESKTOP_UA,
+        Accept: 'video/*,application/octet-stream;q=0.9,*/*;q=0.5',
+      },
+    });
+
+    if (upstream.status >= 300 && upstream.status < 400) {
+      const location = upstream.headers.get('location');
+      if (!location) {
+        throw new Error('Upstream redirect missing location header');
+      }
+      currentUrl = new URL(location, validated).toString();
+      continue;
+    }
+
+    return upstream;
+  }
+
+  throw new Error('Too many redirects while fetching video file');
+}
+
 async function startServer() {
   const app = express();
   const httpServer = http.createServer(app);
@@ -404,6 +539,89 @@ async function startServer() {
         watchUrl: url,
         error: error instanceof Error ? error.message : 'Resolution error',
       });
+    }
+  });
+
+  app.get('/api/download/proxy', async (req: Request, res: Response) => {
+    const rawUrl = typeof req.query.url === 'string' ? req.query.url : '';
+    const rawFilename = typeof req.query.filename === 'string' ? req.query.filename : 'MovieKart_Video.mp4';
+
+    if (!rawUrl) {
+      res.status(400).json({ ok: false, error: 'Missing url query parameter' });
+      return;
+    }
+
+    const abortController = new AbortController();
+    req.on('close', () => {
+      if (!res.writableEnded) {
+        abortController.abort();
+      }
+    });
+
+    try {
+      const upstream = await fetchPublicVideoWithSafeRedirects(rawUrl, abortController.signal);
+      if (!upstream.ok || !upstream.body) {
+        res.status(upstream.status >= 400 ? upstream.status : 502).json({
+          ok: false,
+          error: `Video source returned HTTP ${upstream.status}`,
+        });
+        return;
+      }
+
+      const contentType = (upstream.headers.get('content-type') || 'application/octet-stream')
+        .split(';')[0]
+        .trim()
+        .toLowerCase();
+
+      const isAllowedMediaType =
+        contentType.startsWith('video/') ||
+        contentType.startsWith('audio/') ||
+        contentType === 'application/octet-stream' ||
+        contentType === 'binary/octet-stream';
+
+      if (!isAllowedMediaType) {
+        abortController.abort();
+        res.status(422).json({
+          ok: false,
+          error: 'Source URL did not return a downloadable video file.',
+        });
+        return;
+      }
+
+      const safeFilename = sanitizeDownloadFilename(rawFilename);
+      res.setHeader('Content-Type', contentType.startsWith('video/') ? contentType : 'video/mp4');
+      res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}"`);
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+
+      const contentLength = upstream.headers.get('content-length');
+      if (contentLength && /^\d+$/.test(contentLength)) {
+        res.setHeader('Content-Length', contentLength);
+      }
+
+      const nodeStream = Readable.fromWeb(upstream.body as unknown as NodeWebReadableStream);
+      nodeStream.on('error', () => {
+        if (!res.headersSent) {
+          res.status(502).json({ ok: false, error: 'Video stream interrupted' });
+        } else {
+          res.end();
+        }
+      });
+      nodeStream.pipe(res);
+    } catch (error) {
+      if (abortController.signal.aborted) return;
+      const message = error instanceof Error ? error.message : 'Download proxy error';
+      const status =
+        message.includes('Invalid') ||
+        message.includes('HTTPS') ||
+        message.includes('credentials') ||
+        message.includes('permitted') ||
+        message.includes('restricted')
+          ? 400
+          : 502;
+      if (!res.headersSent) {
+        res.status(status).json({ ok: false, error: message });
+      }
     }
   });
 

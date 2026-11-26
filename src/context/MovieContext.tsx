@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback, ReactNode } from 'react';
 import {
   collection,
   onSnapshot,
@@ -14,6 +14,19 @@ import {
   increment
 } from 'firebase/firestore';
 import { DEFAULT_LIVE_CHANNELS } from '../lib/liveChannels';
+import {
+  RealDeviceStorageInfo,
+  getRealDeviceStorageInfo,
+  getAllOfflineVideoMeta,
+  getOfflineVideoRecord,
+  saveOfflineVideoBlob,
+  deleteOfflineVideoBlob,
+  clearAllOfflineVideoBlobs,
+  downloadVideoWithProgress,
+  saveVideoToPhoneGallery,
+  requestPersistentStorage,
+  formatBytes
+} from '../lib/offlineDownloads';
 import {
   User,
   GoogleAuthProvider,
@@ -78,6 +91,7 @@ interface MovieContextType {
   isAuthenticated: boolean;
   watchlist: string[];
   downloads: DownloadItem[];
+  deviceStorage: RealDeviceStorageInfo | null;
   continueWatchingList: ContinueWatchingItem[];
   watchHistory: WatchHistoryItem[];
   offlineMode: boolean;
@@ -124,6 +138,9 @@ interface MovieContextType {
   deleteDownload: (id: string) => void;
   clearAllDownloads: () => void;
   getDownloadStatus: (id: string) => DownloadItem | undefined;
+  saveDownloadToGallery: (id: string) => Promise<void>;
+  refreshDeviceStorage: () => Promise<void>;
+  playOfflineDownload: (item: DownloadItem) => void;
 
   // Continue Watching & Watch History Actions
   updateWatchProgress: (params: {
@@ -387,6 +404,9 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       return [];
     }
   });
+
+  const [deviceStorage, setDeviceStorage] = useState<RealDeviceStorageInfo | null>(null);
+  const activeDownloadControllersRef = useRef<Map<string, AbortController>>(new Map());
 
   const [continueWatchingList, setContinueWatchingList] = useState<ContinueWatchingItem[]>(() => {
     try {
@@ -1181,41 +1201,85 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }
   }, [currentUser]);
 
-  // Handle active offline downloads progression
-  useEffect(() => {
-    const hasActiveDownloads = downloads.some((d) => d.status === 'downloading');
-    if (!hasActiveDownloads) return;
+  // Measure real phone/device storage via StorageManager API + exact IndexedDB video bytes
+  const refreshDeviceStorage = useCallback(async () => {
+    try {
+      const info = await getRealDeviceStorageInfo();
+      setDeviceStorage(info);
+      const realMb = +(info.moviesBytes / (1024 * 1024)).toFixed(2);
+      setCurrentUser((prev) => {
+        if (!prev) return prev;
+        if (prev.storageUsedMb === realMb && prev.downloadsCount === info.moviesCount) {
+          return prev;
+        }
+        return {
+          ...prev,
+          storageUsedMb: realMb,
+          downloadsCount: info.moviesCount
+        };
+      });
+    } catch {
+      // ignore
+    }
+  }, []);
 
-    const interval = setInterval(() => {
+  // Reconcile persisted download metadata with actual video Blobs stored in IndexedDB on mount / user switch
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const metaMap = await getAllOfflineVideoMeta();
+      if (cancelled) return;
+
       setDownloads((prev) =>
         prev.map((item) => {
-          if (item.status !== 'downloading') return item;
-          const increment = Math.floor(Math.random() * 8) + 6;
-          const nextProgress = Math.min(100, item.progress + increment);
-          const nextSpeed = +(Math.random() * 4 + 3.2).toFixed(1);
+          const isActivelyRunning = activeDownloadControllersRef.current.has(item.movieId);
+          const localMeta = metaMap[item.movieId];
 
-          if (nextProgress >= 100) {
-            showToast(`"${item.movieTitle}" downloaded for offline viewing!`);
+          if (localMeta) {
+            const realMb = +(localMeta.sizeBytes / (1024 * 1024)).toFixed(2);
             return {
               ...item,
-              progress: 100,
               status: 'completed',
+              progress: 100,
               speedMbps: 0,
-              downloadedAt: 'Just now'
+              fileSizeBytes: localMeta.sizeBytes,
+              fileSizeMb: realMb,
+              downloadedBytes: localMeta.sizeBytes,
+              totalBytes: localMeta.sizeBytes,
+              mimeType: localMeta.mimeType,
+              fileName: localMeta.fileName,
+              hasLocalBlob: true,
+              errorMessage: undefined
             };
           }
 
-          return {
-            ...item,
-            progress: nextProgress,
-            speedMbps: nextSpeed
-          };
+          if (item.status === 'downloading' && !isActivelyRunning) {
+            return { ...item, status: 'paused', speedMbps: 0, hasLocalBlob: false };
+          }
+
+          if (item.status === 'completed') {
+            return { ...item, hasLocalBlob: false };
+          }
+
+          return item;
         })
       );
-    }, 600);
 
-    return () => clearInterval(interval);
-  }, [downloads]);
+      await refreshDeviceStorage();
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser?.id, refreshDeviceStorage]);
+
+  // Abort any in-flight downloads when provider unmounts
+  useEffect(() => {
+    return () => {
+      activeDownloadControllersRef.current.forEach((ctrl) => ctrl.abort());
+      activeDownloadControllersRef.current.clear();
+    };
+  }, []);
 
   const toggleWatchlist = (id: string) => {
     setWatchlist((prev) => {
@@ -1248,18 +1312,25 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     quality: string = '1080p FHD'
   ) => {
     const existing = downloads.find((d) => d.movieId === item.id);
-    if (existing && existing.status === 'completed') {
-      showToast(`"${item.title}" is already in your offline library.`);
+    if (existing && existing.status === 'completed' && existing.hasLocalBlob) {
+      showToast(`"${item.title}" is already saved on your phone.`);
       return;
     }
 
-    if (existing && existing.status === 'downloading') {
+    if (activeDownloadControllersRef.current.has(item.id)) {
       showToast(`"${item.title}" is already downloading.`);
+      return;
+    }
+
+    if (!item.videoUrl || !item.videoUrl.trim()) {
+      showToast('This title does not have a downloadable video file.');
       return;
     }
 
     const isEp = 'isEpisode' in item && !!item.isEpisode;
     const epTitle = 'episodeTitle' in item ? item.episodeTitle : undefined;
+    const controller = new AbortController();
+    activeDownloadControllersRef.current.set(item.id, controller);
 
     const newItem: DownloadItem = {
       movieId: item.id,
@@ -1268,38 +1339,247 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       posterUrl: item.posterUrl,
       videoUrl: item.videoUrl,
       quality,
-      fileSizeMb: item.fileSizeMb || 260,
-      progress: 5,
+      fileSizeMb: 0,
+      fileSizeBytes: 0,
+      downloadedBytes: 0,
+      totalBytes: undefined,
+      progress: 0,
       status: 'downloading',
-      speedMbps: 4.8,
+      speedMbps: 0,
+      hasLocalBlob: false,
+      savedToGallery: false,
+      errorMessage: undefined,
       isEpisode: isEp,
       episodeTitle: epTitle
     };
 
     setDownloads((prev) => [newItem, ...prev.filter((d) => d.movieId !== item.id)]);
-    showToast(`Downloading "${item.title}" (${quality})...`);
+    showToast(`Downloading "${item.title}" to phone storage...`);
+
+    void requestPersistentStorage();
+
+    (async () => {
+      try {
+        const result = await downloadVideoWithProgress({
+          videoUrl: item.videoUrl,
+          title: item.title,
+          signal: controller.signal,
+          onProgress: (info) => {
+            if (controller.signal.aborted) return;
+            setDownloads((prev) =>
+              prev.map((d) => {
+                if (d.movieId !== item.id) return d;
+                const realBytes = info.totalBytes ?? info.downloadedBytes;
+                return {
+                  ...d,
+                  progress: info.progress,
+                  downloadedBytes: info.downloadedBytes,
+                  totalBytes: info.totalBytes ?? undefined,
+                  fileSizeBytes: realBytes,
+                  fileSizeMb: +(realBytes / (1024 * 1024)).toFixed(2),
+                  speedMbps: info.speedMbps,
+                  status: 'downloading'
+                };
+              })
+            );
+          }
+        });
+
+        if (controller.signal.aborted) return;
+
+        // Save real video Blob into IndexedDB on the phone for true offline playback
+        await saveOfflineVideoBlob({
+          id: item.id,
+          blob: result.blob,
+          sizeBytes: result.sizeBytes,
+          mimeType: result.mimeType,
+          fileName: result.fileName,
+          savedAt: Date.now()
+        });
+
+        // Automatically trigger saving the .mp4 file to Phone Downloads / Android Gallery
+        let savedToPhone = false;
+        try {
+          const outcome = await saveVideoToPhoneGallery(result.blob, result.fileName, item.title, {
+            preferNativeShare: false
+          });
+          savedToPhone = outcome !== 'cancelled';
+        } catch {
+          savedToPhone = false;
+        }
+
+        const realMb = +(result.sizeBytes / (1024 * 1024)).toFixed(2);
+        const nowLabel = new Date().toLocaleDateString('en-US', {
+          month: 'short',
+          day: 'numeric'
+        });
+
+        setDownloads((prev) =>
+          prev.map((d) =>
+            d.movieId === item.id
+              ? {
+                  ...d,
+                  progress: 100,
+                  status: 'completed',
+                  speedMbps: 0,
+                  fileSizeBytes: result.sizeBytes,
+                  fileSizeMb: realMb,
+                  downloadedBytes: result.sizeBytes,
+                  totalBytes: result.sizeBytes,
+                  mimeType: result.mimeType,
+                  fileName: result.fileName,
+                  hasLocalBlob: true,
+                  savedToGallery: savedToPhone,
+                  errorMessage: undefined,
+                  downloadedAt: nowLabel
+                }
+              : d
+          )
+        );
+
+        await refreshDeviceStorage();
+        showToast(
+          `"${item.title}" (${formatBytes(result.sizeBytes)}) saved offline & exported to phone!`
+        );
+      } catch (err) {
+        if (controller.signal.aborted) return;
+        const message =
+          err instanceof Error ? err.message : 'Download failed. Check your connection and try again.';
+        setDownloads((prev) =>
+          prev.map((d) =>
+            d.movieId === item.id
+              ? {
+                  ...d,
+                  status: 'error',
+                  speedMbps: 0,
+                  errorMessage: message
+                }
+              : d
+          )
+        );
+        showToast(`Download failed: ${message}`);
+      } finally {
+        activeDownloadControllersRef.current.delete(item.id);
+      }
+    })();
   };
 
   const pauseDownload = (id: string) => {
+    const controller = activeDownloadControllersRef.current.get(id);
+    if (controller) {
+      controller.abort();
+      activeDownloadControllersRef.current.delete(id);
+    }
     setDownloads((prev) =>
       prev.map((d) => (d.movieId === id ? { ...d, status: 'paused', speedMbps: 0 } : d))
     );
+    showToast('Download paused');
   };
 
   const resumeDownload = (id: string) => {
-    setDownloads((prev) =>
-      prev.map((d) => (d.movieId === id ? { ...d, status: 'downloading', speedMbps: 4.2 } : d))
+    const existing = downloads.find((d) => d.movieId === id);
+    if (!existing) return;
+    startDownload(
+      {
+        id: existing.movieId,
+        title: existing.movieTitle,
+        genre: existing.genre,
+        posterUrl: existing.posterUrl,
+        videoUrl: existing.videoUrl,
+        fileSizeMb: existing.fileSizeMb,
+        isEpisode: existing.isEpisode,
+        episodeTitle: existing.episodeTitle
+      },
+      existing.quality
     );
   };
 
   const deleteDownload = (id: string) => {
+    const controller = activeDownloadControllersRef.current.get(id);
+    if (controller) {
+      controller.abort();
+      activeDownloadControllersRef.current.delete(id);
+    }
     setDownloads((prev) => prev.filter((d) => d.movieId !== id));
-    showToast('Download removed from device');
+    void (async () => {
+      await deleteOfflineVideoBlob(id);
+      await refreshDeviceStorage();
+    })();
+    showToast('Download deleted from phone storage');
   };
 
   const clearAllDownloads = () => {
+    activeDownloadControllersRef.current.forEach((ctrl) => ctrl.abort());
+    activeDownloadControllersRef.current.clear();
     setDownloads([]);
-    showToast('All offline downloads cleared');
+    void (async () => {
+      await clearAllOfflineVideoBlobs();
+      await refreshDeviceStorage();
+    })();
+    showToast('All offline downloads cleared from phone storage');
+  };
+
+  const saveDownloadToGallery = async (id: string) => {
+    const item = downloads.find((d) => d.movieId === id);
+    const record = await getOfflineVideoRecord(id);
+    if (!record) {
+      showToast('Offline video file not found — tap Re-download first.');
+      return;
+    }
+
+    try {
+      const outcome = await saveVideoToPhoneGallery(
+        record.blob,
+        record.fileName,
+        item?.movieTitle || record.fileName,
+        { preferNativeShare: true }
+      );
+
+      if (outcome === 'cancelled') return;
+
+      setDownloads((prev) =>
+        prev.map((d) => (d.movieId === id ? { ...d, savedToGallery: true } : d))
+      );
+
+      if (outcome === 'shared_to_gallery') {
+        showToast('Tap "Save Video" in the sheet to store directly in your Phone Gallery!');
+      } else {
+        showToast(`Saved "${record.fileName}" to Phone Downloads / Gallery!`);
+      }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Could not export video to gallery.');
+    }
+  };
+
+  const playOfflineDownload = (item: DownloadItem) => {
+    const movie = movies.find((m) => m.id === item.movieId);
+    if (movie) {
+      playMovie(movie);
+      return;
+    }
+
+    for (const show of tvShows) {
+      for (const season of show.seasons || []) {
+        const ep = season.episodes.find((e) => e.id === item.movieId);
+        if (ep) {
+          playEpisode(show, season.seasonNumber, ep);
+          return;
+        }
+      }
+    }
+
+    // Play directly from offline phone storage even when catalog is unavailable offline
+    setSelectedVJTrack(null);
+    setCurrentlyPlayingItem({
+      id: item.movieId,
+      movieId: item.isEpisode ? undefined : item.movieId,
+      title: item.movieTitle,
+      subTitle: item.episodeTitle,
+      videoUrl: item.videoUrl,
+      posterUrl: item.posterUrl,
+      quality: item.quality,
+      fileSizeMb: item.fileSizeMb
+    });
   };
 
   const getDownloadStatus = (id: string) => {
@@ -1400,9 +1680,11 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const playMovie = (movie: Movie, vjTrackId?: string) => {
     if (!ensureTrialAllowsPlayback()) return;
     if (offlineMode) {
-      const isDownloaded = downloads.some((d) => d.movieId === movie.id && d.status === 'completed');
+      const isDownloaded = downloads.some(
+        (d) => d.movieId === movie.id && d.status === 'completed' && d.hasLocalBlob
+      );
       if (!isDownloaded) {
-        showToast(`Offline Mode active: "${movie.title}" is not downloaded yet!`);
+        showToast(`Offline Mode active: "${movie.title}" is not downloaded to your phone yet!`);
         return;
       }
     }
@@ -1471,9 +1753,11 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const playEpisode = (show: TVShow, seasonNumber: number, episode: Episode, vjTrackId?: string) => {
     if (!ensureTrialAllowsPlayback()) return;
     if (offlineMode) {
-      const isDownloaded = downloads.some((d) => d.movieId === episode.id && d.status === 'completed');
+      const isDownloaded = downloads.some(
+        (d) => d.movieId === episode.id && d.status === 'completed' && d.hasLocalBlob
+      );
       if (!isDownloaded) {
-        showToast(`Offline Mode active: "${episode.title}" is not downloaded yet!`);
+        showToast(`Offline Mode active: "${episode.title}" is not downloaded to your phone yet!`);
         return;
       }
     }
@@ -1522,9 +1806,11 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const resumeContinueWatching = (item: ContinueWatchingItem) => {
     if (!ensureTrialAllowsPlayback()) return;
     if (offlineMode) {
-      const isDownloaded = downloads.some((d) => d.movieId === item.itemId && d.status === 'completed');
+      const isDownloaded = downloads.some(
+        (d) => d.movieId === item.itemId && d.status === 'completed' && d.hasLocalBlob
+      );
       if (!isDownloaded) {
-        showToast(`Offline Mode active: "${item.title}" is not downloaded yet!`);
+        showToast(`Offline Mode active: "${item.title}" is not downloaded to your phone yet!`);
         return;
       }
     }
@@ -3586,6 +3872,7 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         isAuthenticated,
         watchlist,
         downloads,
+        deviceStorage,
         continueWatchingList,
         watchHistory,
         offlineMode,
@@ -3616,6 +3903,9 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         deleteDownload,
         clearAllDownloads,
         getDownloadStatus,
+        saveDownloadToGallery,
+        refreshDeviceStorage,
+        playOfflineDownload,
         updateWatchProgress,
         removeFromContinueWatching,
         clearContinueWatching,

@@ -23,7 +23,9 @@ export const HeroCarousel: React.FC = () => {
 
   const currentMovie = featuredMovies[currentIndex] || featuredMovies[0];
   const inWatchlist = isInWatchlist(currentMovie.id);
-  const isDownloaded = downloads.some((d) => d.movieId === currentMovie.id && d.status === 'completed');
+  const isDownloaded = downloads.some(
+    (d) => d.movieId === currentMovie.id && d.status === 'completed' && d.hasLocalBlob
+  );
   const defaultVJ = currentMovie.vjTracks?.find((t) => t.isDefault) || currentMovie.vjTracks?.[0];
   const hasRatings = (currentMovie.ratingsCount || 0) > 0 && (currentMovie.rating5 || 0) > 0;
   const viewsCount = Math.max(0, Math.floor(currentMovie.viewsCount || 0));

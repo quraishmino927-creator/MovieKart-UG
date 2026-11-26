@@ -328,7 +328,7 @@ export const TVShowDetailsModal: React.FC = () => {
             <div className="space-y-3">
               {currentSeason.episodes.map((ep) => {
                 const epDownload = getDownloadStatus(ep.id);
-                const isDownloaded = epDownload?.status === 'completed';
+                const isDownloaded = Boolean(epDownload?.status === 'completed' && epDownload?.hasLocalBlob);
                 const isDownloading = epDownload?.status === 'downloading';
 
                 return (

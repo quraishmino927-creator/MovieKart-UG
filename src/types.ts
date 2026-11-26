@@ -215,6 +215,14 @@ export interface DownloadItem {
   videoUrl: string;
   quality: string;
   fileSizeMb: number;
+  fileSizeBytes?: number;
+  downloadedBytes?: number;
+  totalBytes?: number;
+  mimeType?: string;
+  fileName?: string;
+  hasLocalBlob?: boolean;
+  savedToGallery?: boolean;
+  errorMessage?: string;
   progress: number; // 0 - 100
   status: 'downloading' | 'completed' | 'paused' | 'error';
   speedMbps: number;

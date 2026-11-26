@@ -32,6 +32,7 @@ export const MovieDetailsModal: React.FC = () => {
     isInWatchlist,
     startDownload,
     getDownloadStatus,
+    saveDownloadToGallery,
     rateMovie,
     openMovieDetails,
     movies,
@@ -49,7 +50,7 @@ export const MovieDetailsModal: React.FC = () => {
   const movie = selectedMovieForDetails;
   const inWatchlist = isInWatchlist(movie.id);
   const downloadInfo = getDownloadStatus(movie.id);
-  const isDownloaded = downloadInfo?.status === 'completed';
+  const isDownloaded = Boolean(downloadInfo?.status === 'completed' && downloadInfo?.hasLocalBlob);
   const isDownloading = downloadInfo?.status === 'downloading';
 
   // Strict real ratings (start from 0 — no fake fallback)
@@ -187,18 +188,27 @@ export const MovieDetailsModal: React.FC = () => {
               </button>
             )}
 
-            {/* Offline Download button */}
+            {/* Offline Download / Save to Gallery button */}
             <button
               type="button"
               onClick={() => {
-                if (!isDownloaded && !isDownloading) {
+                if (isDownloaded) {
+                  void saveDownloadToGallery(movie.id);
+                } else if (!isDownloading) {
                   startDownload(movie, downloadQuality);
                 }
               }}
-              disabled={isDownloaded || isDownloading}
+              disabled={isDownloading}
+              title={
+                isDownloaded
+                  ? 'Saved offline — tap to save MP4 to Phone Gallery'
+                  : isDownloading
+                  ? `Downloading ${downloadInfo?.progress}%`
+                  : 'Download real video to phone & gallery'
+              }
               className={`flex items-center justify-center gap-2 px-3.5 sm:px-4 py-3 rounded-xl font-medium text-xs sm:text-sm border transition-all cursor-pointer whitespace-nowrap ${
                 isDownloaded
-                  ? 'bg-emerald-600/20 text-emerald-400 border-emerald-500/30'
+                  ? 'bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 border-emerald-500/30'
                   : isDownloading
                   ? 'bg-amber-600/20 text-amber-300 border-amber-500/30'
                   : 'bg-white/5 hover:bg-white/10 text-white border-white/10'
@@ -207,7 +217,7 @@ export const MovieDetailsModal: React.FC = () => {
               {isDownloaded ? (
                 <>
                   <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                  <span>Downloaded</span>
+                  <span>Save to Gallery</span>
                 </>
               ) : isDownloading ? (
                 <>
