@@ -32,7 +32,6 @@ export const MovieDetailsModal: React.FC = () => {
     isInWatchlist,
     startDownload,
     getDownloadStatus,
-    saveDownloadToGallery,
     rateMovie,
     openMovieDetails,
     movies,
@@ -188,12 +187,13 @@ export const MovieDetailsModal: React.FC = () => {
               </button>
             )}
 
-            {/* Offline Download / Save to Gallery button */}
+            {/* In-Website Offline Download button */}
             <button
               type="button"
               onClick={() => {
                 if (isDownloaded) {
-                  void saveDownloadToGallery(movie.id);
+                  closeMovieDetails();
+                  setActiveTab('downloads');
                 } else if (!isDownloading) {
                   startDownload(movie, downloadQuality);
                 }
@@ -201,10 +201,10 @@ export const MovieDetailsModal: React.FC = () => {
               disabled={isDownloading}
               title={
                 isDownloaded
-                  ? 'Saved offline — tap to save MP4 to Phone Gallery'
+                  ? 'Saved offline inside MovieKart — tap to open Downloads'
                   : isDownloading
                   ? `Downloading ${downloadInfo?.progress}%`
-                  : 'Download real video to phone & gallery'
+                  : 'Download for offline viewing inside MovieKart'
               }
               className={`flex items-center justify-center gap-2 px-3.5 sm:px-4 py-3 rounded-xl font-medium text-xs sm:text-sm border transition-all cursor-pointer whitespace-nowrap ${
                 isDownloaded
@@ -217,7 +217,7 @@ export const MovieDetailsModal: React.FC = () => {
               {isDownloaded ? (
                 <>
                   <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                  <span>Save to Gallery</span>
+                  <span>Downloaded</span>
                 </>
               ) : isDownloading ? (
                 <>

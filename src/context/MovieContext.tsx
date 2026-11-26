@@ -18,14 +18,12 @@ import {
   RealDeviceStorageInfo,
   getRealDeviceStorageInfo,
   getAllOfflineVideoMeta,
-  getOfflineVideoRecord,
   saveOfflineVideoBlob,
   deleteOfflineVideoBlob,
   clearAllOfflineVideoBlobs,
   downloadVideoWithProgress,
-  saveVideoToPhoneGallery,
   requestPersistentStorage,
-  formatBytes
+  formatMegabytes
 } from '../lib/offlineDownloads';
 import {
   User,
@@ -138,7 +136,6 @@ interface MovieContextType {
   deleteDownload: (id: string) => void;
   clearAllDownloads: () => void;
   getDownloadStatus: (id: string) => DownloadItem | undefined;
-  saveDownloadToGallery: (id: string) => Promise<void>;
   refreshDeviceStorage: () => Promise<void>;
   playOfflineDownload: (item: DownloadItem) => void;
 
@@ -438,6 +435,7 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
   const [offlineMode, setOfflineMode] = useState<boolean>(() => {
     try {
+      if (typeof navigator !== 'undefined' && !navigator.onLine) return true;
       return localStorage.getItem(STORAGE_KEYS.OFFLINE) === 'true';
     } catch {
       return false;
@@ -458,9 +456,13 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     return path.endsWith('/poster') || hash === '#/poster';
   };
 
-  const [activeTab, setActiveTabState] = useState<ActiveTab>(() =>
-    isAdminPath() ? 'admin' : isPosterPath() ? 'poster' : 'home'
-  );
+  const [activeTab, setActiveTabState] = useState<ActiveTab>(() => {
+    if (isAdminPath()) return 'admin';
+    if (isPosterPath()) return 'poster';
+    // Auto-open Downloads tab immediately when MovieKart opens offline
+    if (typeof navigator !== 'undefined' && !navigator.onLine) return 'downloads';
+    return 'home';
+  });
 
   const setActiveTab = (tab: ActiveTab) => {
     setActiveTabState(tab);
@@ -1273,6 +1275,32 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     };
   }, [currentUser?.id, refreshDeviceStorage]);
 
+  // Auto-switch to Downloads tab whenever the phone loses internet connection
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handleGoOffline = () => {
+      setOfflineMode(true);
+      if (!isAdminPath() && !isPosterPath()) {
+        setActiveTabState('downloads');
+      }
+      showToast('Offline Mode — showing your downloaded movies');
+    };
+
+    const handleGoOnline = () => {
+      setOfflineMode(false);
+      showToast('Back online!');
+    };
+
+    window.addEventListener('offline', handleGoOffline);
+    window.addEventListener('online', handleGoOnline);
+
+    return () => {
+      window.removeEventListener('offline', handleGoOffline);
+      window.removeEventListener('online', handleGoOnline);
+    };
+  }, []);
+
   // Abort any in-flight downloads when provider unmounts
   useEffect(() => {
     return () => {
@@ -1354,12 +1382,21 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     };
 
     setDownloads((prev) => [newItem, ...prev.filter((d) => d.movieId !== item.id)]);
-    showToast(`Downloading "${item.title}" to phone storage...`);
+    showToast(`Downloading "${item.title}" inside MovieKart...`);
 
     void requestPersistentStorage();
 
     (async () => {
       try {
+        // Check available phone storage before downloading (< 1 GB free warning)
+        const preStorage = await getRealDeviceStorageInfo();
+        setDeviceStorage(preStorage);
+        if (preStorage.isLowStorage) {
+          showToast(
+            `Low phone storage warning (${formatMegabytes(preStorage.availableBytes)} free). Delete old movies if download fails.`
+          );
+        }
+
         const result = await downloadVideoWithProgress({
           videoUrl: item.videoUrl,
           title: item.title,
@@ -1387,7 +1424,7 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
         if (controller.signal.aborted) return;
 
-        // Save real video Blob into IndexedDB on the phone for true offline playback
+        // Save real video Blob inside IndexedDB (key = movieId) for 100% in-website offline play
         await saveOfflineVideoBlob({
           id: item.id,
           blob: result.blob,
@@ -1396,17 +1433,6 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           fileName: result.fileName,
           savedAt: Date.now()
         });
-
-        // Automatically trigger saving the .mp4 file to Phone Downloads / Android Gallery
-        let savedToPhone = false;
-        try {
-          const outcome = await saveVideoToPhoneGallery(result.blob, result.fileName, item.title, {
-            preferNativeShare: false
-          });
-          savedToPhone = outcome !== 'cancelled';
-        } catch {
-          savedToPhone = false;
-        }
 
         const realMb = +(result.sizeBytes / (1024 * 1024)).toFixed(2);
         const nowLabel = new Date().toLocaleDateString('en-US', {
@@ -1429,7 +1455,6 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
                   mimeType: result.mimeType,
                   fileName: result.fileName,
                   hasLocalBlob: true,
-                  savedToGallery: savedToPhone,
                   errorMessage: undefined,
                   downloadedAt: nowLabel
                 }
@@ -1439,7 +1464,7 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
         await refreshDeviceStorage();
         showToast(
-          `"${item.title}" (${formatBytes(result.sizeBytes)}) saved offline & exported to phone!`
+          `"${item.title}" (${formatMegabytes(result.sizeBytes)}) ready to play offline inside MovieKart!`
         );
       } catch (err) {
         if (controller.signal.aborted) return;
@@ -1519,57 +1544,13 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     showToast('All offline downloads cleared from phone storage');
   };
 
-  const saveDownloadToGallery = async (id: string) => {
-    const item = downloads.find((d) => d.movieId === id);
-    const record = await getOfflineVideoRecord(id);
-    if (!record) {
-      showToast('Offline video file not found — tap Re-download first.');
-      return;
-    }
-
-    try {
-      const outcome = await saveVideoToPhoneGallery(
-        record.blob,
-        record.fileName,
-        item?.movieTitle || record.fileName,
-        { preferNativeShare: true }
-      );
-
-      if (outcome === 'cancelled') return;
-
-      setDownloads((prev) =>
-        prev.map((d) => (d.movieId === id ? { ...d, savedToGallery: true } : d))
-      );
-
-      if (outcome === 'shared_to_gallery') {
-        showToast('Tap "Save Video" in the sheet to store directly in your Phone Gallery!');
-      } else {
-        showToast(`Saved "${record.fileName}" to Phone Downloads / Gallery!`);
-      }
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Could not export video to gallery.');
-    }
-  };
-
   const playOfflineDownload = (item: DownloadItem) => {
-    const movie = movies.find((m) => m.id === item.movieId);
-    if (movie) {
-      playMovie(movie);
-      return;
-    }
+    const matchedMovie = movies.find((m) => m.id === item.movieId);
+    const defaultTrack =
+      matchedMovie?.vjTracks?.find((t) => t.isDefault) || matchedMovie?.vjTracks?.[0] || null;
 
-    for (const show of tvShows) {
-      for (const season of show.seasons || []) {
-        const ep = season.episodes.find((e) => e.id === item.movieId);
-        if (ep) {
-          playEpisode(show, season.seasonNumber, ep);
-          return;
-        }
-      }
-    }
-
-    // Play directly from offline phone storage even when catalog is unavailable offline
-    setSelectedVJTrack(null);
+    // Always play strictly from IndexedDB inside the website <video> player (never Drive iframe or external app)
+    setSelectedVJTrack(defaultTrack);
     setCurrentlyPlayingItem({
       id: item.movieId,
       movieId: item.isEpisode ? undefined : item.movieId,
@@ -1577,8 +1558,12 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       subTitle: item.episodeTitle,
       videoUrl: item.videoUrl,
       posterUrl: item.posterUrl,
+      backdropUrl: matchedMovie?.backdropUrl,
+      year: matchedMovie?.year,
       quality: item.quality,
-      fileSizeMb: item.fileSizeMb
+      vjTracks: matchedMovie?.vjTracks,
+      fileSizeMb: item.fileSizeMb,
+      offlineOnly: true
     });
   };
 
@@ -3903,7 +3888,6 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         deleteDownload,
         clearAllDownloads,
         getDownloadStatus,
-        saveDownloadToGallery,
         refreshDeviceStorage,
         playOfflineDownload,
         updateWatchProgress,

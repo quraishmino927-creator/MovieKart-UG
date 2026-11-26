@@ -110,8 +110,10 @@ const MainContent: React.FC = () => {
     );
   }
 
-  // 1. FORCE SIGN UP / LOGIN GATE: Block ALL movies, TV shows & Live TV until signed in
-  if (!currentUser) {
+  // 1. FORCE SIGN UP / LOGIN GATE: Block ALL online browsing until signed in,
+  //    EXCEPT when opening the app offline so users can always play their saved offline downloads.
+  const isDeviceOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+  if (!currentUser && !isDeviceOffline) {
     return (
       <>
         <AuthScreen isForcedGate={true} />
@@ -124,6 +126,23 @@ const MainContent: React.FC = () => {
           </div>
         )}
       </>
+    );
+  }
+
+  if (!currentUser && isDeviceOffline) {
+    return (
+      <div className="min-h-screen bg-[#070709] text-gray-100 flex flex-col font-['Plus_Jakarta_Sans'] pb-24">
+        <Header onLockedSubscribeClick={() => setShowSubscriptionLockedModal(true)} />
+        <div className="bg-amber-500/20 border-b border-amber-500/40 px-4 py-2 text-center text-xs text-amber-200 font-semibold flex items-center justify-center gap-2">
+          <WifiOff className="w-4 h-4 text-amber-400" />
+          <span>You are offline — Play your downloaded movies below without internet.</span>
+        </div>
+        <main className="flex-1">
+          <DownloadsView />
+        </main>
+        <BottomNavBar />
+        <VideoPlayerModal />
+      </div>
     );
   }
 

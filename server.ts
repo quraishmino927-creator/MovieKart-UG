@@ -7,6 +7,7 @@ import { Readable } from 'node:stream';
 import type { ReadableStream as NodeWebReadableStream } from 'node:stream/web';
 import express from 'express';
 import type { Request, Response } from 'express';
+import driveDownloadHandler from './netlify/functions/drive-download.mts';
 
 type ResolvedMode = 'live' | 'latest_video' | 'video' | 'playlist_fallback';
 
@@ -539,6 +540,54 @@ async function startServer() {
         watchUrl: url,
         error: error instanceof Error ? error.message : 'Resolution error',
       });
+    }
+  });
+
+  app.all('/.netlify/functions/drive-download', async (req: Request, res: Response) => {
+    try {
+      const fullUrl = `http://${req.headers.host || 'localhost:3000'}${req.originalUrl}`;
+      const headers = new Headers();
+      for (const [key, value] of Object.entries(req.headers)) {
+        if (typeof value === 'string') headers.set(key, value);
+        else if (Array.isArray(value)) headers.set(key, value.join(', '));
+      }
+
+      const webReq = new globalThis.Request(fullUrl, {
+        method: req.method,
+        headers,
+      });
+
+      const webRes = await driveDownloadHandler(webReq);
+      res.status(webRes.status);
+      webRes.headers.forEach((value, key) => {
+        res.setHeader(key, value);
+      });
+
+      if (!webRes.body) {
+        res.end();
+        return;
+      }
+
+      const nodeStream = Readable.fromWeb(webRes.body as unknown as NodeWebReadableStream);
+      req.on('close', () => {
+        if (!res.writableEnded) {
+          nodeStream.destroy();
+        }
+      });
+      nodeStream.on('error', () => {
+        if (!res.headersSent) {
+          res.status(502).json({ error: 'Drive video stream interrupted' });
+        } else {
+          res.end();
+        }
+      });
+      nodeStream.pipe(res);
+    } catch (error) {
+      if (!res.headersSent) {
+        res.status(502).json({
+          error: error instanceof Error ? error.message : 'Drive download proxy error',
+        });
+      }
     }
   });
 

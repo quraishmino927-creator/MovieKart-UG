@@ -183,6 +183,7 @@ export interface PlayableItem {
   vjTracks?: VJTrack[];
   fileSizeMb?: number;
   isTrailer?: boolean;
+  offlineOnly?: boolean;
   startTime?: number; // timestamp in seconds to resume playback from
 }
 

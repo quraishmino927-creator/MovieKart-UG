@@ -7,7 +7,9 @@ import {
   Download,
   CheckCircle2,
   MessageSquareQuote,
-  Film
+  Film,
+  Loader2,
+  WifiOff
 } from 'lucide-react';
 import { VJTrack } from '../types';
 import { isYouTubeUrl, toYouTubeEmbedUrl, resolveYouTubeStream } from '../lib/liveChannels';
@@ -75,16 +77,20 @@ export const VideoPlayerModal: React.FC = () => {
   const item = currentlyPlayingItem;
   const videoUrl = item?.videoUrl || '';
   const [localOfflineUrl, setLocalOfflineUrl] = useState<string>('');
+  const [checkingOfflineBlob, setCheckingOfflineBlob] = useState<boolean>(false);
 
-  // Load real offline Blob from IndexedDB if this movie/episode has been downloaded to the phone
+  // ALWAYS check IndexedDB FIRST before rendering any remote player/iframe
   useEffect(() => {
     if (!item || item.isTrailer) {
       setLocalOfflineUrl('');
+      setCheckingOfflineBlob(false);
       return;
     }
 
     let cancelled = false;
     let createdObjectUrl = '';
+    setCheckingOfflineBlob(true);
+    setLocalOfflineUrl('');
 
     getOfflineVideoRecord(item.id)
       .then((record) => {
@@ -98,6 +104,9 @@ export const VideoPlayerModal: React.FC = () => {
       })
       .catch(() => {
         if (!cancelled) setLocalOfflineUrl('');
+      })
+      .finally(() => {
+        if (!cancelled) setCheckingOfflineBlob(false);
       });
 
     return () => {
@@ -108,9 +117,22 @@ export const VideoPlayerModal: React.FC = () => {
     };
   }, [item?.id, item?.isTrailer]);
 
+  const isDeviceOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+  const isStrictOfflinePlayback = Boolean(item?.offlineOnly || isDeviceOffline);
   const isPlayingLocalOffline = Boolean(localOfflineUrl);
-  const isGoogleDrive = !isPlayingLocalOffline && videoUrl.toLowerCase().includes('drive.google.com');
-  const isYouTube = !isPlayingLocalOffline && !isGoogleDrive && isYouTubeUrl(videoUrl);
+  const missingOfflineBlob = !checkingOfflineBlob && isStrictOfflinePlayback && !isPlayingLocalOffline;
+
+  const isGoogleDrive =
+    !checkingOfflineBlob &&
+    !isPlayingLocalOffline &&
+    !isStrictOfflinePlayback &&
+    videoUrl.toLowerCase().includes('drive.google.com');
+  const isYouTube =
+    !checkingOfflineBlob &&
+    !isPlayingLocalOffline &&
+    !isStrictOfflinePlayback &&
+    !isGoogleDrive &&
+    isYouTubeUrl(videoUrl);
   const isIframeEmbed = isGoogleDrive || isYouTube;
   const driveSrc = isGoogleDrive ? toDriveEmbedUrl(videoUrl) : '';
   const [resolvedYoutubeUrl, setResolvedYoutubeUrl] = useState<string>('');
@@ -135,7 +157,7 @@ export const VideoPlayerModal: React.FC = () => {
   }, [isYouTube, videoUrl]);
 
   const youtubeSrc = isYouTube ? resolvedYoutubeUrl || toYouTubeEmbedUrl(videoUrl) : '';
-  const effectiveVideoSrc = localOfflineUrl || videoUrl;
+  const effectiveVideoSrc = localOfflineUrl || (isStrictOfflinePlayback ? '' : videoUrl);
 
   const parentMovie = item
     ? item.movieId
@@ -381,7 +403,28 @@ export const VideoPlayerModal: React.FC = () => {
 
       {/* Main Watch Player Area (Black Background) */}
       <div className="relative flex-1 w-full bg-black flex items-center justify-center overflow-hidden p-0 sm:p-4">
-        {isGoogleDrive ? (
+        {checkingOfflineBlob ? (
+          <div className="flex flex-col items-center justify-center gap-3 text-gray-300 p-6">
+            <Loader2 className="w-9 h-9 text-red-500 animate-spin" />
+            <p className="text-sm font-semibold">Loading offline video from device storage...</p>
+          </div>
+        ) : missingOfflineBlob ? (
+          <div className="max-w-md mx-auto text-center p-6 space-y-3">
+            <div className="w-14 h-14 mx-auto rounded-2xl bg-red-600/20 border border-red-500/40 flex items-center justify-center text-red-400">
+              <WifiOff className="w-7 h-7" />
+            </div>
+            <h3 className="text-lg font-bold text-white">Offline Video File Not Found</h3>
+            <p className="text-xs sm:text-sm text-gray-400">
+              This video is not stored in your browser&apos;s offline storage yet. Reconnect to the internet and download it again to watch offline inside MovieKart.
+            </p>
+            <button
+              onClick={handleExitPlayer}
+              className="px-5 py-2.5 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold text-xs cursor-pointer"
+            >
+              Back to Downloads
+            </button>
+          </div>
+        ) : isGoogleDrive ? (
           <iframe
             src={driveSrc}
             width="100%"
@@ -405,6 +448,7 @@ export const VideoPlayerModal: React.FC = () => {
           />
         ) : (
           <video
+            key={effectiveVideoSrc}
             ref={videoRef}
             controls
             autoPlay
@@ -418,11 +462,11 @@ export const VideoPlayerModal: React.FC = () => {
           />
         )}
 
-        {/* Offline Badge Notification (only shown when genuinely playing from local phone storage) */}
+        {/* Offline Badge Notification (only shown when genuinely playing from local IndexedDB Blob) */}
         {isPlayingLocalOffline && !item.isTrailer && (
           <div className="absolute top-4 left-4 z-20 bg-emerald-600/90 text-white text-xs font-bold px-3 py-1.5 rounded-lg flex items-center gap-2 shadow-lg backdrop-blur-sm pointer-events-none">
             <CheckCircle2 className="w-4 h-4 text-emerald-200" />
-            <span>Playing from Phone Offline Storage</span>
+            <span>Playing Offline Inside MovieKart</span>
           </div>
         )}
 
