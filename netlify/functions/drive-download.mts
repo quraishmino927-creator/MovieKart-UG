@@ -32,7 +32,7 @@ function getCorsOrigin(req: Request): string {
 function buildCorsHeaders(req: Request, extra: Record<string, string> = {}): Headers {
   const headers = new Headers({
     'Access-Control-Allow-Origin': getCorsOrigin(req),
-    'Access-Control-Allow-Methods': 'GET, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Range',
     'Access-Control-Expose-Headers': 'Content-Length, Content-Type, Content-Disposition, Content-Range, Accept-Ranges',
     Vary: 'Origin',
@@ -207,12 +207,13 @@ export default async function handler(req: Request): Promise<Response> {
     return new Response(null, { status: 204, headers: buildCorsHeaders(req) });
   }
 
-  if (req.method !== 'GET') {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
     return jsonError(req, 405, 'Method not allowed');
   }
 
   const url = new URL(req.url);
   const fileId = (url.searchParams.get('fileId') || '').trim();
+  const isInlineStream = url.searchParams.get('mode') === 'stream';
 
   if (!FILE_ID_PATTERN.test(fileId)) {
     return jsonError(req, 400, 'Missing or invalid Google Drive fileId');
@@ -285,7 +286,7 @@ export default async function handler(req: Request): Promise<Response> {
       if (upstream.status === 429 || upstream.status === 403) {
         return jsonError(req, 429, 'Drive quota');
       }
-      return jsonError(req, upstream.status >= 400 ? upstream.status : 502, `Google Drive error (HTTP ${upstream.status})`);
+      return jsonError(req, upstream.status >= 400 ? upstream.status : 502, `Video stream error (HTTP ${upstream.status})`);
     }
 
     const normalizedType = contentType.split(';')[0].trim();
@@ -293,8 +294,9 @@ export default async function handler(req: Request): Promise<Response> {
 
     const responseHeaders = buildCorsHeaders(req, {
       'Content-Type': outContentType,
-      'Cache-Control': 'no-store',
+      'Cache-Control': isInlineStream ? 'private, max-age=300' : 'no-store',
       'X-Content-Type-Options': 'nosniff',
+      'Accept-Ranges': upstream.headers.get('accept-ranges') || 'bytes',
     });
 
     const contentLength = upstream.headers.get('content-length');
@@ -307,14 +309,25 @@ export default async function handler(req: Request): Promise<Response> {
       responseHeaders.set('Content-Range', contentRange);
     }
 
-    const acceptRanges = upstream.headers.get('accept-ranges');
-    if (acceptRanges) {
-      responseHeaders.set('Accept-Ranges', acceptRanges);
+    if (isInlineStream) {
+      responseHeaders.set('Content-Disposition', 'inline');
+    } else {
+      const disposition = upstream.headers.get('content-disposition');
+      if (disposition) {
+        responseHeaders.set('Content-Disposition', disposition);
+      }
     }
 
-    const disposition = upstream.headers.get('content-disposition');
-    if (disposition) {
-      responseHeaders.set('Content-Disposition', disposition);
+    if (req.method === 'HEAD') {
+      try {
+        await upstream.body.cancel();
+      } catch {
+        // ignore cancel error
+      }
+      return new Response(null, {
+        status: upstream.status === 206 ? 206 : 200,
+        headers: responseHeaders,
+      });
     }
 
     return new Response(upstream.body, {
@@ -322,7 +335,7 @@ export default async function handler(req: Request): Promise<Response> {
       headers: responseHeaders,
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to stream video from Google Drive';
+    const message = err instanceof Error ? err.message : 'Failed to stream video';
     return jsonError(req, 502, message);
   }
 }

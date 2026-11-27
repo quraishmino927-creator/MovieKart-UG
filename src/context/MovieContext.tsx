@@ -1544,11 +1544,82 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     showToast('All offline downloads cleared from phone storage');
   };
 
+  const requestCinemaFullscreenLandscape = () => {
+    if (typeof window === 'undefined' || typeof document === 'undefined') return;
+    const isMobileLike =
+      window.innerWidth <= 920 ||
+      window.matchMedia?.('(pointer: coarse)').matches ||
+      /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+    if (!isMobileLike) return;
+
+    const rootEl = document.documentElement as HTMLElement & {
+      webkitRequestFullscreen?: () => Promise<void> | void;
+    };
+    const orientationApi = window.screen?.orientation as
+      | (ScreenOrientation & { lock?: (orientation: string) => Promise<void> })
+      | undefined;
+
+    const lockLandscape = () => {
+      try {
+        if (orientationApi && typeof orientationApi.lock === 'function') {
+          orientationApi.lock('landscape').catch(() => {});
+        }
+      } catch {
+        // Ignore on browsers that disallow orientation lock
+      }
+    };
+
+    try {
+      if (!document.fullscreenElement) {
+        if (typeof rootEl.requestFullscreen === 'function') {
+          Promise.resolve(rootEl.requestFullscreen())
+            .then(lockLandscape)
+            .catch(lockLandscape);
+        } else if (typeof rootEl.webkitRequestFullscreen === 'function') {
+          Promise.resolve(rootEl.webkitRequestFullscreen())
+            .then(lockLandscape)
+            .catch(lockLandscape);
+        } else {
+          lockLandscape();
+        }
+      } else {
+        lockLandscape();
+      }
+    } catch {
+      lockLandscape();
+    }
+  };
+
+  const exitCinemaFullscreenLandscape = () => {
+    if (typeof window === 'undefined' || typeof document === 'undefined') return;
+    try {
+      const orientationApi = window.screen?.orientation as
+        | (ScreenOrientation & { unlock?: () => void })
+        | undefined;
+      if (orientationApi && typeof orientationApi.unlock === 'function') {
+        orientationApi.unlock();
+      }
+    } catch {
+      // Ignore
+    }
+    try {
+      const doc = document as Document & { webkitExitFullscreen?: () => Promise<void> | void };
+      if (document.fullscreenElement && typeof document.exitFullscreen === 'function') {
+        document.exitFullscreen().catch(() => {});
+      } else if (typeof doc.webkitExitFullscreen === 'function') {
+        Promise.resolve(doc.webkitExitFullscreen()).catch(() => {});
+      }
+    } catch {
+      // Ignore
+    }
+  };
+
   const playOfflineDownload = (item: DownloadItem) => {
     const matchedMovie = movies.find((m) => m.id === item.movieId);
     const defaultTrack =
       matchedMovie?.vjTracks?.find((t) => t.isDefault) || matchedMovie?.vjTracks?.[0] || null;
 
+    requestCinemaFullscreenLandscape();
     // Always play strictly from IndexedDB inside the website <video> player (never Drive iframe or external app)
     setSelectedVJTrack(defaultTrack);
     setCurrentlyPlayingItem({
@@ -1693,6 +1764,7 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       ? movie.vjTracks?.find((t) => t.id === vjTrackId) || movie.vjTracks?.[0]
       : movie.vjTracks?.find((t) => t.isDefault) || movie.vjTracks?.[0] || null;
 
+    requestCinemaFullscreenLandscape();
     setSelectedVJTrack(track || null);
     setCurrentlyPlayingItem({
       id: movie.id,
@@ -1769,6 +1841,7 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       ? show.vjTracks?.find((t) => t.id === vjTrackId) || show.vjTracks?.[0]
       : show.vjTracks?.find((t) => t.isDefault) || show.vjTracks?.[0] || null;
 
+    requestCinemaFullscreenLandscape();
     setSelectedVJTrack(track || null);
     setCurrentlyPlayingItem({
       id: episode.id,
@@ -1813,6 +1886,8 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       genre: item.genre,
       duration: item.durationString,
     });
+
+    requestCinemaFullscreenLandscape();
 
     if (item.type === 'movie') {
       const targetMovie = movies.find((m) => m.id === item.itemId);
@@ -1937,6 +2012,7 @@ export const MovieProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
 
   const closePlayer = () => {
+    exitCinemaFullscreenLandscape();
     setCurrentlyPlayingItem(null);
     setSelectedVJTrack(null);
   };

@@ -63,7 +63,8 @@ const MainContent: React.FC = () => {
     moviesLoading,
     firestoreError,
     offlineMode,
-    toastMessage
+    toastMessage,
+    currentlyPlayingItem
   } = useMovieContext();
 
   const [filterVJOnly, setFilterVJOnly] = useState(false);
@@ -132,15 +133,19 @@ const MainContent: React.FC = () => {
   if (!currentUser && isDeviceOffline) {
     return (
       <div className="min-h-screen bg-[#070709] text-gray-100 flex flex-col font-['Plus_Jakarta_Sans'] pb-24">
-        <Header onLockedSubscribeClick={() => setShowSubscriptionLockedModal(true)} />
-        <div className="bg-amber-500/20 border-b border-amber-500/40 px-4 py-2 text-center text-xs text-amber-200 font-semibold flex items-center justify-center gap-2">
-          <WifiOff className="w-4 h-4 text-amber-400" />
-          <span>You are offline — Play your downloaded movies below without internet.</span>
-        </div>
+        {!currentlyPlayingItem && (
+          <Header onLockedSubscribeClick={() => setShowSubscriptionLockedModal(true)} />
+        )}
+        {!currentlyPlayingItem && (
+          <div className="bg-amber-500/20 border-b border-amber-500/40 px-4 py-2 text-center text-xs text-amber-200 font-semibold flex items-center justify-center gap-2">
+            <WifiOff className="w-4 h-4 text-amber-400" />
+            <span>You are offline — Play your downloaded movies below without internet.</span>
+          </div>
+        )}
         <main className="flex-1">
           <DownloadsView />
         </main>
-        <BottomNavBar />
+        {!currentlyPlayingItem && <BottomNavBar />}
         <VideoPlayerModal />
       </div>
     );
@@ -197,11 +202,15 @@ const MainContent: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-[#070709] text-gray-100 flex flex-col font-['Plus_Jakarta_Sans'] pb-24">
-      {/* Top Header with Movies / TV Shows Toggle & Locked Subscribe Button */}
-      <Header onLockedSubscribeClick={() => setShowSubscriptionLockedModal(true)} />
+      {/* Top Header with Movies / TV Shows Toggle & Locked Subscribe Button (hidden during playback) */}
+      {!currentlyPlayingItem && (
+        <Header onLockedSubscribeClick={() => setShowSubscriptionLockedModal(true)} />
+      )}
 
       {/* 30 Days Free Trial Countdown Box */}
-      <TrialBanner onSubscribeClick={() => setShowSubscriptionLockedModal(true)} />
+      {!currentlyPlayingItem && (
+        <TrialBanner onSubscribeClick={() => setShowSubscriptionLockedModal(true)} />
+      )}
 
       {/* Offline Mode Banner */}
       {offlineMode && (
@@ -415,14 +424,14 @@ const MainContent: React.FC = () => {
         onClose={() => setShowSubscriptionLockedModal(false)}
       />
 
-      {/* Offline Connectivity Indicator */}
-      <OfflineIndicator />
+      {/* Offline Connectivity Indicator (hidden during playback) */}
+      {!currentlyPlayingItem && <OfflineIndicator />}
 
-      {/* Floating WhatsApp Support Button */}
-      <WhatsAppSupportButton />
+      {/* Floating WhatsApp Support Button (hidden during playback) */}
+      {!currentlyPlayingItem && <WhatsAppSupportButton />}
 
-      {/* Bottom Navigation Bar */}
-      <BottomNavBar />
+      {/* Bottom Navigation Bar (hidden during playback) */}
+      {!currentlyPlayingItem && <BottomNavBar />}
     </div>
   );
 };
